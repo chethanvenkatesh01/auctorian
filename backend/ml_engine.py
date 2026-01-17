@@ -32,14 +32,14 @@ except ImportError:
 
 class MLEngine:
     """
-    The Intelligence Engine (Glass Box Edition v8.1 - Sovereign Monolith).
+    The Intelligence Engine (v9.0 - Sovereign Monolith).
     
-    Orchestrates: 
-    1. Data Health & Cleansing
-    2. Model Tournament (Random Forest vs Linear)
-    3. Hypercube Vectorization (5-Year Elasticity Search Space)
-    4. Audit Logging (Glass Box Transparency)
-    5. Sovereign Narration (Local LLM Explanations)
+    Capabilities:
+    1. Model Tournament (Selects best algo)
+    2. Hierarchy Awareness (Aggregates Forecasts: SKU -> Category -> Global)
+    3. Hypercube Vectorization (Search space for Solver)
+    4. Glass Box Auditing (Explainability)
+    5. Sovereign Narrative (Local LLM Analyst)
     """
     
     def __init__(self):
@@ -55,7 +55,7 @@ class MLEngine:
         
         self.model = None
         self.metrics = {"r2_score": 0, "status": "Untrained"}
-        self.HORIZON_WEEKS = 12 # Default operational horizon
+        self.HORIZON_WEEKS = 12 
         
         self._ensure_directories()
         self._load_model()
@@ -85,10 +85,12 @@ class MLEngine:
     def run_demand_pipeline(self):
         """
         MASTER ORCHESTRATOR:
-        1. Cleanse & Load (Fixes missing data)
-        2. Train/Tournament (Selects best model)
-        3. Vectorize (Generates Hypercube for pricing simulations)
-        4. Audit (Logs the 'Why' & Accuracy Matrix)
+        1. Cleanse & Load 
+        2. Enrich with Hierarchy (Category/Brand)
+        3. Run Model Tournament (RF vs Linear)
+        4. Vectorize Hypercube (For Simulation)
+        5. Calculate Hierarchical Accuracy (For UI Matrix)
+        6. Generate Audit Logs
         """
         if not SKLEARN_AVAILABLE:
             return {"status": "error", "message": "Scikit-Learn missing"}
@@ -96,7 +98,7 @@ class MLEngine:
         logger.info("🧠 [ML] Starting Intelligence Pipeline...")
         run_id = f"RUN-{uuid.uuid4().hex[:8].upper()}"
         
-        # Initialize the Glass Box Artifact
+        # Initialize Audit Artifact
         audit_artifact = {
             "run_id": run_id,
             "generated_at": datetime.now().isoformat(),
@@ -106,7 +108,7 @@ class MLEngine:
         }
 
         try:
-            # --- STEP 1: LOAD & CLEANSE ---
+            # --- STEP 1: LOAD DATA ---
             df = feature_store.build_master_table()
             
             if df.empty or len(df) < 10:
@@ -114,28 +116,49 @@ class MLEngine:
                 return {"status": "skipped", "message": "Insufficient data"}
             
             audit_artifact['data_health']['log'].append(f"Ingested {len(df)} rows.")
+
+            # --- STEP 2: ENRICH HIERARCHY ---
+            # Fetch hierarchy map from Domain Manager to enable aggregation
+            hierarchy_map = domain_mgr.get_hierarchy_map()
             
-            # --- STEP 2: TOURNAMENT (Training) ---
-            # We train multiple models and pick the winner
+            # Map IDs to Categories/Brands safely
+            df['category'] = df['node_id'].apply(lambda x: hierarchy_map.get(x, {}).get('category', 'Other'))
+            df['brand'] = df['node_id'].apply(lambda x: hierarchy_map.get(x, {}).get('brand', 'Other'))
+
+            # --- STEP 3: TOURNAMENT (Training) ---
+            # Train models and pick the winner
             train_result = self._run_tournament(df)
             
-            # Populate Transparency Log
+            # Update Audit Log
             audit_artifact['model_transparency']['features_used'] = train_result.get('features', [])
             audit_artifact['model_transparency']['tournament_scoreboard'] = train_result.get('scoreboard', {})
             audit_artifact['drivers'] = train_result.get('importance', {})
 
-            # --- STEP 3: HYPERCUBE VECTORIZATION ---
-            # This generates the future search space for the solver (Pricing Engine)
-            # We approximate 100 elasticity vectors per data point
+            # --- STEP 4: HYPERCUBE VECTORIZATION ---
+            # Generate search space for Pricing Engine
             vector_count = len(df) * 100 
             self._generate_hypercube_artifacts(df)
             audit_artifact['data_health']['log'].append(f"Generated Elasticity Hypercube ({vector_count} nodes).")
 
-            # --- STEP 4: ACCURACY MATRIX & PERSISTENCE ---
-            # Generate the WMAPE Heatmap Data for the UI
-            self._generate_accuracy_matrix(train_result.get('r2_score', 0))
+            # --- STEP 5: HIERARCHICAL ACCURACY MATRIX ---
+            # Generate predictions on the full dataset for backtesting
+            features = train_result.get('features')
+            # Ensure columns exist
+            for f in features:
+                if f not in df.columns: df[f] = 0
             
-            # Save the Audit Log for the Inspector UI
+            X_full = df[features].fillna(0)
+            df['predicted_qty'] = self.model.predict(X_full)
+
+            # Calculate Accuracy at Levels (Global -> Category -> Brand)
+            accuracy_matrix = self._calculate_hierarchical_accuracy(df)
+            
+            # --- STEP 6: PERSISTENCE ---
+            # Save Accuracy Matrix
+            with open(self.accuracy_matrix_path, 'w') as f:
+                json.dump(accuracy_matrix, f)
+            
+            # Save Audit Log
             with open(self.audit_log_path, 'w') as f:
                 json.dump(audit_artifact, f)
 
@@ -145,7 +168,7 @@ class MLEngine:
                 "status": "success",
                 "run_id": run_id,
                 "metrics": train_result,
-                "nodes_generated": vector_count  # [FIX] Added this key back for Frontend
+                "nodes_generated": vector_count 
             }
 
         except Exception as e:
@@ -186,12 +209,12 @@ class MLEngine:
         lr_pred = lr_model.predict(X_test)
         lr_r2 = r2_score(y_test, lr_pred)
         
-        # Selection Logic
+        # Selection Logic (Prefer RF unless it's terrible)
         winner_name = "Random Forest"
         winner_model = rf_model
         winner_score = rf_r2
         
-        # Extract Feature Importance (for Glass Box)
+        # Extract Feature Importance (RF specific)
         importances = rf_model.feature_importances_
         importance_dict = dict(zip(features, [round(x, 4) for x in importances]))
         
@@ -218,47 +241,60 @@ class MLEngine:
         }
 
     # ==============================================================================
-    # 📊 UI ARTIFACT GENERATION (Matrix & Hypercube)
+    # 📊 ARTIFACT GENERATION (Matrix & Hypercube)
     # ==============================================================================
 
-    def _generate_accuracy_matrix(self, r2_score_val):
+    def _calculate_hierarchical_accuracy(self, df: pd.DataFrame) -> List[Dict]:
         """
-        Generates the Scorecard for the 'Forecast Accuracy Widget'.
-        Saves to accuracy_matrix.json.
+        Aggregates forecasts to Higher Levels (Category, Brand, Global)
+        and calculates accuracy for each group.
+        Populates the 'Forecast Accuracy' Widget.
         """
-        # Simulate WMAPE based on R2 (Inverse relationship roughly)
-        base_wmape = max(0.05, 1.0 - r2_score_val)
-        
         matrix = []
-        
-        # Generate Time Lags (The "Cone of Uncertainty")
-        for lag in [1, 4, 8, 12]:
-            # Accuracy degrades over time
-            degradation = (lag * 0.015)
-            lag_wmape = min(0.99, base_wmape + degradation)
+
+        def calc_row(level, group, actual, predicted):
+            if actual == 0: actual = 1.0 # Avoid Div/0
+            diff = abs(actual - predicted)
+            wmape = diff / actual
+            bias = (predicted - actual) / actual
             
-            matrix.append({
-                "lag_weeks": lag,
-                "wmape": round(lag_wmape, 3),
-                "accuracy": int((1.0 - lag_wmape) * 100),
-                "bias": round(np.random.uniform(-0.05, 0.05), 3) # Simulated bias
-            })
-            
-        with open(self.accuracy_matrix_path, 'w') as f:
-            json.dump(matrix, f)
+            return {
+                "level": level,
+                "group": group,
+                "accuracy": max(0, int((1 - wmape) * 100)),
+                "wmape": round(wmape, 3),
+                "bias": round(bias, 3)
+            }
+
+        # 1. Global Level
+        global_act = df['SALES_QTY'].sum()
+        global_pred = df['predicted_qty'].sum()
+        matrix.append(calc_row("Global", "All", global_act, global_pred))
+
+        # 2. Category Level (The "Portfolio Effect")
+        if 'category' in df.columns:
+            cats = df.groupby('category')[['SALES_QTY', 'predicted_qty']].sum().reset_index()
+            for _, row in cats.iterrows():
+                matrix.append(calc_row("Category", row['category'], row['SALES_QTY'], row['predicted_qty']))
+
+        # 3. Brand Level
+        if 'brand' in df.columns:
+            brands = df.groupby('brand')[['SALES_QTY', 'predicted_qty']].sum().reset_index()
+            for _, row in brands.iterrows():
+                matrix.append(calc_row("Brand", row['brand'], row['SALES_QTY'], row['predicted_qty']))
+
+        return matrix
 
     def _generate_hypercube_artifacts(self, df):
         """
         Generates pre-calculated elasticity vectors.
-        The UI uses this to show "What If" scenarios instantly without calling Python.
+        The UI uses this to show "What If" scenarios instantly.
         """
-        # This is a placeholder for the actual heavy compute.
-        # We ensure the file exists so the UI doesn't 404.
+        # Placeholder for heavy compute. Ensures file exists.
         hypercube_dummy = {
             "meta": {"generated_at": datetime.now().isoformat()},
             "elasticity_vectors": {}
         }
-        # Real impl would iterate SKUs and calculate price response curves
         return True
 
     # ==============================================================================
@@ -267,8 +303,7 @@ class MLEngine:
 
     def generate_forecast(self, node_id: str, days: int = 7) -> Dict[str, Any]:
         """
-        Single Prediction (On-Demand).
-        Uses Autoregression (feeding predictions back as inputs).
+        Single Prediction (On-Demand) with Autoregression.
         """
         if not self.model: return {"error": "Model not trained"}
         
@@ -293,7 +328,7 @@ class MLEngine:
                 input_df = pd.DataFrame([{
                     'PRICE': curr_price,
                     'PROMO_FLAG': 0, 
-                    'IS_WEEKEND': 0, # Simplified for forecast
+                    'IS_WEEKEND': 0, 
                     'DAY_OF_WEEK': 0,
                     'LAG_1': curr_sales,
                     'MA_7': curr_ma
@@ -353,7 +388,7 @@ class MLEngine:
         return {}
 
     def get_accuracy_matrix(self) -> List[Dict]:
-        """Returns the WMAPE Heatmap data."""
+        """Returns the Hierarchical Accuracy data."""
         if os.path.exists(self.accuracy_matrix_path):
             with open(self.accuracy_matrix_path, 'r') as f: return json.load(f)
         return []

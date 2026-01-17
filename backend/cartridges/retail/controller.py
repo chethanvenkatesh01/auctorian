@@ -30,31 +30,34 @@ class FeasibilityAdapter:
 
     def _load_data(self):
         try:
-            # Resolve absolute path for Docker/Local stability
-            base_path = os.getcwd() # backend/ is usually the workdir
-            if 'backend' not in base_path: 
-                base_path = os.path.join(base_path, 'backend')
+            # ROBUST PATH RESOLUTION
+            current_dir = os.getcwd() # In Docker, this is /app
             
-            full_path = os.path.join(base_path, self.data_path)
+            # Check 1: Direct path (Docker /app/data/retail_db.json)
+            path_1 = os.path.join(current_dir, self.data_path)
             
+            # Check 2: Nested path (Local Dev backend/data/retail_db.json)
+            path_2 = os.path.join(current_dir, 'backend', self.data_path)
+            
+            full_path = ""
+            if os.path.exists(path_1):
+                full_path = path_1
+            elif os.path.exists(path_2):
+                full_path = path_2
+            else:
+                # Fallback: absolute lookup assuming repo structure
+                full_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../data/retail_db.json'))
+
             if os.path.exists(full_path):
                 with open(full_path, 'r') as f:
                     self._cache = json.load(f)
-                logger.info(f"[FEASIBILITY] Hydrated {len(self._cache)} records from {full_path}")
+                logger.info(f"[FEASIBILITY] Hydrated {len(self._cache.get('products', []))} records from {full_path}")
             else:
-                logger.warning(f"[FEASIBILITY] Database not found at {full_path}. Running empty.")
+                logger.warning(f"[FEASIBILITY] Database NOT found. Checked: {path_1}, {path_2}. Running empty.")
                 self._cache = {}
         except Exception as e:
             logger.error(f"[FEASIBILITY] Hydration Failed: {e}")
             self._cache = {}
-
-    def get_sku_context(self, sku: str) -> Dict:
-        """Retrieves 'Ground Truth' for a SKU from local memory."""
-        # Exact match or find first partial match
-        for item in self._cache.get("products", []):
-            if sku.lower() in item.get("name", "").lower() or sku == item.get("id"):
-                return item
-        return {}
 
 
 class RetailCartridge:

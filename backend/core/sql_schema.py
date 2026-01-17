@@ -1,4 +1,22 @@
-import sqlite3
+import os
+import logging
+import json
+
+# --- LOGGING CONFIGURATION ---
+logger = logging.getLogger("SQL_SCHEMA")
+
+# --- DATABASE DRIVER LOADING ---
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    POSTGRES_AVAILABLE = True
+except ImportError:
+    POSTGRES_AVAILABLE = False
+    import sqlite3
+
+# --- GLOBAL CONFIG ---
+# If this Env Var is set (by Docker), we use Postgres. Otherwise, SQLite.
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 INIT_STMTS = [
     # =========================================================
@@ -7,9 +25,9 @@ INIT_STMTS = [
     """
     CREATE TABLE IF NOT EXISTS universal_objects (
         obj_id TEXT PRIMARY KEY,
-        obj_type TEXT NOT NULL, -- 'PRODUCT', 'LOCATION', 'CUSTOMER'
+        obj_type TEXT NOT NULL, 
         name TEXT,
-        attributes JSON, -- { "category": "Footwear", "brand": "Puma" }
+        attributes JSON, 
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
@@ -17,10 +35,10 @@ INIT_STMTS = [
     CREATE TABLE IF NOT EXISTS universal_events (
         event_id TEXT PRIMARY KEY,
         primary_target_id TEXT NOT NULL,
-        event_type TEXT NOT NULL, -- 'SALES_QTY', 'PRICE', 'INV_SNAPSHOT'
+        event_type TEXT NOT NULL, 
         value REAL,
         timestamp TIMESTAMP,
-        meta JSON, -- { "source": "POS", "is_promo": true }
+        meta JSON, 
         FOREIGN KEY(primary_target_id) REFERENCES universal_objects(obj_id)
     )
     """,
@@ -32,7 +50,7 @@ INIT_STMTS = [
     CREATE TABLE IF NOT EXISTS ledger_entries (
         entry_id TEXT PRIMARY KEY,
         entity_id TEXT,
-        account_type TEXT, -- 'REVENUE', 'COGS', 'OPEX'
+        account_type TEXT, 
         amount REAL,
         currency TEXT,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -45,8 +63,8 @@ INIT_STMTS = [
     # =========================================================
     """
     CREATE TABLE IF NOT EXISTS policy_store (
-        policy_key TEXT PRIMARY KEY, -- 'MIN_MARGIN_PCT'
-        entity_id TEXT, -- 'GLOBAL' or Specific SKU
+        policy_key TEXT PRIMARY KEY, 
+        entity_id TEXT, 
         value REAL,
         config JSON,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -56,13 +74,11 @@ INIT_STMTS = [
     # =========================================================
     # 4. INTELLIGENCE PLANE (THE BRAIN)
     # =========================================================
-    
-    # A. The Demand Hypercube (Fast Path)
     """
     CREATE TABLE IF NOT EXISTS demand_hypercube (
         id TEXT PRIMARY KEY,
         sku_id TEXT NOT NULL,
-        week_start_date TEXT NOT NULL, -- ISO8601 Date (Monday)
+        week_start_date TEXT NOT NULL, 
         run_id TEXT, 
         model_used TEXT, 
         confidence_score REAL, 
@@ -73,8 +89,6 @@ INIT_STMTS = [
         FOREIGN KEY(sku_id) REFERENCES universal_objects(obj_id)
     )
     """,
-    
-    # B. The Forecast Audit Log (Rich Path)
     """
     CREATE TABLE IF NOT EXISTS forecast_audit_log (
         audit_id TEXT PRIMARY KEY,
@@ -89,29 +103,23 @@ INIT_STMTS = [
         FOREIGN KEY(sku_id) REFERENCES universal_objects(obj_id)
     )
     """,
-
-    # C. Forecast Snapshots (The Time Capsule - NEW)
-    # Used to verify "What did we predict 3 months ago for today?"
     """
     CREATE TABLE IF NOT EXISTS forecast_snapshots (
         snapshot_id TEXT PRIMARY KEY,
         sku_id TEXT NOT NULL,
-        target_date TEXT NOT NULL, -- The date being predicted
-        generated_at TEXT NOT NULL, -- When the prediction was made
-        lag_weeks INTEGER, -- 4, 12, 24
+        target_date TEXT NOT NULL, 
+        generated_at TEXT NOT NULL, 
+        lag_weeks INTEGER, 
         forecast_qty INTEGER,
         FOREIGN KEY(sku_id) REFERENCES universal_objects(obj_id)
     )
     """,
-
-    # D. Accuracy Matrix (The Scorecard - NEW)
-    # Stores pre-calculated WMAPE for the Dashboard Heatmap
     """
     CREATE TABLE IF NOT EXISTS accuracy_matrix (
-        node_id TEXT, -- 'GLOBAL', 'DIV-FOOTWEAR', 'SKU-123'
-        lag_bucket TEXT, -- '1_MONTH', '3_MONTH', '6_MONTH'
-        wmape_score REAL, -- 0.0 to 1.0 (Lower is better, or inverted to accuracy %)
-        bias_score REAL, -- +10% means over-forecasted
+        node_id TEXT, 
+        lag_bucket TEXT, 
+        wmape_score REAL, 
+        bias_score REAL, 
         last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (node_id, lag_bucket)
     )
@@ -134,15 +142,58 @@ INIT_STMTS = [
     """
 ]
 
-def init_db(db_path):
+# --- SHARED UTILITIES ---
+
+def get_db_connection(db_path="ados_ledger.db"):
     """
-    Initializes the SQLite database with the full Auctorian Schema.
-    Idempotent: Can be run multiple times safely.
+    Universal Connection Factory.
+    Returns a Postgres connection if DATABASE_URL is set, else SQLite.
     """
-    with sqlite3.connect(db_path) as conn:
-        for stmt in INIT_STMTS:
-            try:
-                conn.execute(stmt)
-            except sqlite3.OperationalError as e:
-                print(f"⚠️ Schema Warning: {e}")
-    print(f"✅ Database Schema Initialized at {db_path}")
+    if DATABASE_URL and POSTGRES_AVAILABLE:
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            return conn
+        except Exception as e:
+            logger.error(f"Postgres Connection Failed: {e}. Falling back to SQLite.")
+    
+    # Fallback to SQLite
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def get_placeholder():
+    """Returns '%s' for Postgres or '?' for SQLite"""
+    return "%s" if (DATABASE_URL and POSTGRES_AVAILABLE) else "?"
+
+def init_db(db_path="ados_ledger.db"):
+    """
+    Initializes the database with the full Auctorian Schema.
+    Now supports both Postgres and SQLite.
+    """
+    conn = get_db_connection(db_path)
+    
+    try:
+        if DATABASE_URL and POSTGRES_AVAILABLE:
+            # Postgres Logic
+            with conn.cursor() as cur:
+                for stmt in INIT_STMTS:
+                    # Postgres doesn't strictly need JSON type mapping for table creation
+                    # as long as we use standard SQL.
+                    cur.execute(stmt)
+            conn.commit()
+            logger.info(f"✅ [STORAGE] Postgres Schema Initialized via DATABASE_URL.")
+        else:
+            # SQLite Logic
+            for stmt in INIT_STMTS:
+                try:
+                    conn.execute(stmt)
+                except Exception as e:
+                    logger.warning(f"⚠️ Schema Warning: {e}")
+            conn.commit()
+            logger.info(f"✅ [STORAGE] SQLite Schema Initialized at {db_path}")
+            
+    except Exception as e:
+        logger.error(f"❌ [STORAGE] Schema Init Failed: {e}")
+    finally:
+        conn.close()

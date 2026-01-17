@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, Activity, Zap, GitCommit, RefreshCw, AlertTriangle, PlayCircle, MessageSquare, MousePointerClick } from 'lucide-react';
-import { PlanningScope } from '../../types';
-import { api } from '../../services/api';
+// [FIX] Adjusted import paths from '../..' to '..'
+import { PlanningScope } from '../types';
+import { api } from '../services/api';
 
 interface ForecastWorkbenchProps {
   scope: PlanningScope;

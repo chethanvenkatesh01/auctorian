@@ -165,7 +165,7 @@ const App: React.FC = () => {
         })) as CartridgeManifest[]);
         
         setActiveCartridge(target);
-        setCurrentView('command-center'); 
+        setCurrentView('onboarding'); 
     }
   };
 

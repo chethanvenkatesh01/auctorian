@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 import numpy as np
 
 # --- DATABASE ADAPTER ---
-# We support both SQLite (Dev) and Postgres (Docker/Prod)
 try:
     import psycopg2
     from psycopg2.extras import execute_batch
@@ -30,7 +29,6 @@ def get_db_connection():
     if DATABASE_URL and POSTGRES_AVAILABLE:
         return psycopg2.connect(DATABASE_URL)
     else:
-        # Fallback to local SQLite if not in Docker
         import sqlite3
         return sqlite3.connect("ados_ledger.db")
 
@@ -118,14 +116,26 @@ CATALOG = [
     }
 ]
 
+def clean_slate(conn):
+    """
+    CRITICAL FIX: Deletes data in the correct order to respect Foreign Keys.
+    1. Events (Children)
+    2. Objects (Parents)
+    """
+    logger.info("🧹 Cleaning up old simulation data...")
+    cursor = conn.cursor()
+    # DELETE CHILDREN FIRST
+    cursor.execute("DELETE FROM universal_events")
+    # DELETE PARENTS SECOND
+    cursor.execute("DELETE FROM universal_objects WHERE obj_type='PRODUCT'")
+    conn.commit()
+    logger.info("✨ Clean slate achieved.")
+
 def setup_catalog(conn):
     logger.info("📦 Seeding Catalog...")
     cursor = conn.cursor()
     
-    # 1. Clear existing
-    cursor.execute("DELETE FROM universal_objects WHERE obj_type='PRODUCT'")
-    
-    # 2. Insert new
+    # Insert new products
     ph = get_placeholder() # ? or %s
     query = f"INSERT INTO universal_objects (obj_id, obj_type, name, attributes) VALUES ({ph}, {ph}, {ph}, {ph})"
     
@@ -154,7 +164,6 @@ def generate_events(conn):
     inv["MB-03-TOXIC"] = 0
 
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM universal_events")
 
     for day_offset in range(DAYS_HISTORY + 1):
         curr_date = START_DATE + timedelta(days=day_offset)
@@ -247,6 +256,8 @@ if __name__ == "__main__":
             logger.info("🔌 Connecting to SQLite (Local)...")
             
         with get_db_connection() as conn:
+            # [FIX] Added clean_slate to handle FK constraints
+            clean_slate(conn)
             setup_catalog(conn)
             generate_events(conn)
         logger.info("\n✅ SIMULATION COMPLETE. The World is Ready.")

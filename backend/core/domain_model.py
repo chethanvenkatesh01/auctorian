@@ -1,15 +1,16 @@
 import json
 import logging
 from typing import List, Dict, Optional, Any
-# IMPORTS FROM THE NEW SHARED SCHEMA MODULE
+# IMPORTS FROM THE SHARED SCHEMA MODULE
 from .sql_schema import init_db, get_db_connection, get_placeholder, POSTGRES_AVAILABLE
 
 logger = logging.getLogger("DOMAIN_MANAGER")
 
 class DomainManager:
     """
-    Guardian of the Universal Graph (v4.1 - Introspective).
-    Manages the flexible Ontology and infers Schema from live data.
+    Guardian of the Universal Graph (v5.2 - Hierarchy Aware & Partition Ready).
+    Manages the flexible Ontology, infers Schema from live data, and provides
+    Hierarchy mappings for the Intelligence Layer.
     """
     def __init__(self, db_path="ados_ledger.db"):
         self.db_path = db_path
@@ -24,6 +25,8 @@ class DomainManager:
         """Performance optimizations for the Graph."""
         conn = get_db_connection(self.db_path)
         try:
+            # Note: With Partitioning, some indices are managed at the partition level
+            # in sql_schema.py, but we keep this for SQLite compatibility.
             cmds = [
                 "CREATE INDEX IF NOT EXISTS idx_evt_agg ON universal_events(event_type, timestamp)",
                 "CREATE INDEX IF NOT EXISTS idx_obj_lookup ON universal_objects(obj_type, obj_id)"
@@ -45,7 +48,7 @@ class DomainManager:
             conn.close()
 
     # =========================================================
-    # 1. UNIVERSAL GRAPH API
+    # 1. CORE GRAPH API (Retrieval)
     # =========================================================
 
     def get_objects(self, obj_type: str) -> List[Dict]:
@@ -66,6 +69,8 @@ class DomainManager:
 
             final_list = []
             for item in results:
+                # Merge JSON attributes into the top-level dictionary
+                # This flattens the structure for the Frontend and ML Engine
                 if item.get('attributes'):
                     try:
                         attrs = item['attributes']
@@ -75,63 +80,6 @@ class DomainManager:
                     except: pass
                 final_list.append(item)
             return final_list
-        finally:
-            conn.close()
-
-    def get_structure(self, obj_type: str = None) -> Dict[str, Any]:
-        """
-        🔮 INTROSPECTION ENGINE
-        Scans the actual data in Postgres to reverse-engineer the Ontology.
-        This allows 'simulate_decision_day.py' to automatically define the Data Contracts.
-        """
-        conn = get_db_connection(self.db_path)
-        ph = get_placeholder()
-        
-        target_type = obj_type if obj_type else 'PRODUCT'
-        
-        try:
-            # 1. Fetch a sample of objects to infer schema
-            query = f"SELECT attributes FROM universal_objects WHERE obj_type = {ph} LIMIT 50"
-            
-            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
-                with conn.cursor() as cur:
-                    cur.execute(query, (target_type,))
-                    rows = cur.fetchall()
-                    # Postgres returns tuple like ({...},) or ('{...}',)
-                    samples = [r[0] for r in rows]
-            else:
-                rows = conn.execute(query, (target_type,)).fetchall()
-                samples = [r[0] for r in rows]
-
-            # 2. Infer Fields
-            fields_map = {}
-            for s in samples:
-                data = s if isinstance(s, dict) else json.loads(s)
-                for key, val in data.items():
-                    if key not in fields_map:
-                        fields_map[key] = {"name": key, "types": set(), "sample": val}
-                    fields_map[key]["types"].add(type(val).__name__)
-
-            # 3. Format for Frontend
-            field_list = []
-            for k, v in fields_map.items():
-                field_list.append({
-                    "name": k,
-                    "type": list(v["types"])[0], # Simplified type inference
-                    "required": True,
-                    "description": f"Inferred from data. Sample: {v['sample']}"
-                })
-
-            return {
-                "entity": target_type,
-                "field_count": len(field_list),
-                "fields": field_list,
-                "status": "LIVE_INFERENCE"
-            }
-            
-        except Exception as e:
-            logger.error(f"Structure inference failed: {e}")
-            return {"entity": target_type, "fields": [], "error": str(e)}
         finally:
             conn.close()
 
@@ -183,17 +131,92 @@ class DomainManager:
             conn.close()
 
     # =========================================================
-    # 2. LEGACY COMPATIBILITY LAYER
+    # 2. HIERARCHY & CONTRACTS (Enterprise Features)
+    # =========================================================
+
+    def get_hierarchy_map(self) -> Dict[str, Dict]:
+        """
+        [NEW] Returns a lookup table to map SKU IDs to their Hierarchies.
+        Used by ML Engine to aggregate forecasts from SKU -> Category -> Brand.
+        """
+        products = self.get_objects('PRODUCT')
+        hierarchy = {}
+        for p in products:
+            # We look for standard retail hierarchy keys in the attributes
+            hierarchy[p['obj_id']] = {
+                'category': p.get('category', 'Unknown'),
+                'brand': p.get('brand', 'Unknown'),
+                'region': p.get('region', 'Global'),
+                'sub_category': p.get('sub_category', 'General')
+            }
+        return hierarchy
+
+    def get_structure(self, obj_type: str = None) -> Dict[str, Any]:
+        """
+        [UPDATED] 🔮 INTROSPECTION ENGINE
+        Scans the actual data to auto-discover the Data Contract.
+        Now identifies 'Dimensions' (Category, Brand) for the UI.
+        """
+        target_type = obj_type if obj_type else 'PRODUCT'
+        objects = self.get_objects(target_type)
+        
+        if not objects:
+            return {"entity": target_type, "status": "EMPTY", "fields": []}
+
+        # 1. Infer Fields by scanning a sample
+        fields_map = {}
+        # Scan up to 50 items to get a good representative schema
+        for obj in objects[:50]: 
+            for k, v in obj.items():
+                if k not in ['obj_id', 'obj_type', 'attributes', 'created_at', 'name']:
+                    if k not in fields_map:
+                        fields_map[k] = {"types": set(), "sample": v}
+                    fields_map[k]["types"].add(type(v).__name__)
+
+        # 2. Format for Frontend
+        # Define known Dimensions that trigger Hierarchy behavior
+        known_dimensions = ['category', 'brand', 'region', 'store_type', 'department']
+        
+        contract = []
+        for k, v in fields_map.items():
+            is_dim = k.lower() in known_dimensions
+            contract.append({
+                "name": k,
+                "type": list(v["types"])[0], 
+                "required": True,
+                "is_dimension": is_dim, # Critical for UI grouping
+                "description": f"Inferred {k}. Sample: {v['sample']}"
+            })
+
+        return {
+            "entity": target_type,
+            "field_count": len(contract),
+            "fields": contract,
+            "status": "LIVE_INFERENCE"
+        }
+
+    def save_structure(self, obj_type: str, fields: List[Dict]):
+        """
+        Allows Frontend to 'Lock' the Data Contract.
+        (Currently a placeholder for persistence logic).
+        """
+        logger.info(f"🔒 [DOMAIN] Contract Locked for {obj_type}: {len(fields)} fields defined.")
+        return {"status": "success", "message": "Contract saved."}
+
+    # =========================================================
+    # 3. LEGACY COMPATIBILITY LAYER (Preserved)
     # =========================================================
 
     def get_table(self, level_name: str) -> List[Dict]:
+        """Legacy Adapter: Maps 'universal_objects' -> old 'nodes' format."""
         obj_type = level_name
         objects = self.get_objects(obj_type)
+        
         adapted = []
         for o in objects:
             row = {
                 "node_id": o['obj_id'],
-                "name": o['name'],
+                "name": o.get('name', o['obj_id']),
                 "type": o['obj_type'],
                 "parent_id": o.get('parent_id'), 
                 **{k: v for k, v in o.items() if k not in ['obj_id', 'obj_type', 'name', 'attributes']}
@@ -202,16 +225,21 @@ class DomainManager:
         return adapted
 
     def get_metrics(self, limit=100, offset=0, metric_filter=None) -> List[Dict]:
+        """Legacy Adapter: Maps 'universal_events' -> old 'node_metrics' format."""
         conn = get_db_connection(self.db_path)
         ph = get_placeholder()
+        
         try:
             query = "SELECT * FROM universal_events"
             params = []
+            
             if metric_filter and metric_filter != 'TRANSACTIONS':
                 query += f" WHERE event_type LIKE {ph}"
                 params.append(f"{metric_filter}%")
+            
             query += f" ORDER BY timestamp DESC LIMIT {limit} OFFSET {offset}"
             
+            # Execute
             if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:

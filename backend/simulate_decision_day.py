@@ -1,23 +1,44 @@
-import sqlite3
-import pandas as pd
-import numpy as np
+import os
 import json
 import random
 import uuid
+import logging
 from datetime import datetime, timedelta
-from core.domain_model import domain_mgr
+import numpy as np
+
+# --- DATABASE ADAPTER ---
+# We support both SQLite (Dev) and Postgres (Docker/Prod)
+try:
+    import psycopg2
+    from psycopg2.extras import execute_batch
+    POSTGRES_AVAILABLE = True
+except ImportError:
+    POSTGRES_AVAILABLE = False
+    import sqlite3
+
+# Configure Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("SIMULATION_ENGINE")
 
 # --- CONFIGURATION ---
-DB_PATH = domain_mgr.db_path
 DAYS_HISTORY = 400
 START_DATE = datetime.now() - timedelta(days=DAYS_HISTORY)
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-print(f"🌍 INITIALIZING PUMA RETAIL UNIVERSE")
-print(f"📅 Generating {DAYS_HISTORY} days of history from {START_DATE.date()}...")
+def get_db_connection():
+    """Factory to get the correct DB connection."""
+    if DATABASE_URL and POSTGRES_AVAILABLE:
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        # Fallback to local SQLite if not in Docker
+        import sqlite3
+        return sqlite3.connect("ados_ledger.db")
+
+def get_placeholder():
+    """Returns '%s' for Postgres or '?' for SQLite"""
+    return "%s" if (DATABASE_URL and POSTGRES_AVAILABLE) else "?"
 
 # --- 1. THE CAST OF CHARACTERS (CATALOG) ---
-# Each product represents a specific "Test Case" for the AI.
-
 CATALOG = [
     # --- DOMAIN 1: REPLENISHMENT ---
     {
@@ -25,7 +46,7 @@ CATALOG = [
         "name": "Puma Palermo (Viral Green)",
         "attributes": {
             "category": "Footwear", "brand": "Puma", "cost": 45.0, "lead_time_days": 14, "moq": 50,
-            "dna": "VIRAL_SPIKE" # SCENARIO A: Viral TikTok Trend
+            "dna": "VIRAL_SPIKE" 
         },
         "base_price": 90.0
     },
@@ -34,7 +55,7 @@ CATALOG = [
         "name": "Velocity Nitro 3",
         "attributes": {
             "category": "Running", "brand": "Puma", "cost": 60.0, "lead_time_days": 60, "moq": 100,
-            "dna": "SUPPLY_SHOCK" # SCENARIO B: Long Lead Time Risk
+            "dna": "SUPPLY_SHOCK" 
         },
         "base_price": 130.0
     },
@@ -43,18 +64,17 @@ CATALOG = [
         "name": "Essentials Logo Tee",
         "attributes": {
             "category": "Apparel", "brand": "Puma", "cost": 8.0, "lead_time_days": 7, "moq": 500,
-            "dna": "PHANTOM" # SCENARIO C: Phantom Inventory (Theft)
+            "dna": "PHANTOM" 
         },
         "base_price": 25.0
     },
-
     # --- DOMAIN 2: PRICING ---
     {
         "id": "PUMA-SUEDE-CL",
         "name": "Suede Classic XXI",
         "attributes": {
             "category": "Classics", "brand": "Puma", "cost": 35.0, "lead_time_days": 14, "moq": 50,
-            "dna": "LOSS_LEADER" # SCENARIO D: Competitor Pricing Trap
+            "dna": "LOSS_LEADER" 
         },
         "base_price": 75.0
     },
@@ -63,18 +83,17 @@ CATALOG = [
         "name": "No.1 Logo Tee",
         "attributes": {
             "category": "Apparel", "brand": "Puma", "cost": 10.0, "lead_time_days": 10, "moq": 200,
-            "dna": "INELASTIC" # SCENARIO E: Margin Opportunity
+            "dna": "INELASTIC" 
         },
         "base_price": 30.0
     },
-
     # --- DOMAIN 3: MARKDOWN ---
     {
         "id": "PUMA-RSX-PREPPY",
         "name": "RS-X Preppy",
         "attributes": {
             "category": "Footwear", "brand": "Puma", "cost": 55.0, "lead_time_days": 21, "moq": 20,
-            "dna": "BROKEN_SIZE" # SCENARIO F: Sizes 13 & 6 only
+            "dna": "BROKEN_SIZE" 
         },
         "base_price": 110.0
     },
@@ -83,47 +102,56 @@ CATALOG = [
         "name": "Scuderia Ferrari Race Jacket",
         "attributes": {
             "category": "Motorsport", "brand": "Ferrari", "cost": 80.0, "lead_time_days": 45, "moq": 10,
-            "dna": "BRAND_EQUITY" # SCENARIO G: Do not discount
+            "dna": "BRAND_EQUITY" 
         },
         "base_price": 180.0
     },
-
     # --- DOMAIN 4: ALLOCATION ---
     {
         "id": "MB-03-TOXIC",
         "name": "MB.03 Toxic (LaMelo)",
         "attributes": {
             "category": "Basketball", "brand": "Puma", "cost": 65.0, "lead_time_days": 30, "moq": 50,
-            "dna": "OMNI_RESCUE" # SCENARIO H: DC Empty, Store Full
+            "dna": "OMNI_RESCUE" 
         },
         "base_price": 125.0
     }
 ]
 
 def setup_catalog(conn):
-    print("📦 Seeding Catalog...")
+    logger.info("📦 Seeding Catalog...")
     cursor = conn.cursor()
+    
+    # 1. Clear existing
     cursor.execute("DELETE FROM universal_objects WHERE obj_type='PRODUCT'")
+    
+    # 2. Insert new
+    ph = get_placeholder() # ? or %s
+    query = f"INSERT INTO universal_objects (obj_id, obj_type, name, attributes) VALUES ({ph}, {ph}, {ph}, {ph})"
+    
+    data = []
     for item in CATALOG:
-        cursor.execute(
-            "INSERT INTO universal_objects (obj_id, obj_type, name, attributes) VALUES (?, ?, ?, ?)",
-            (item['id'], 'PRODUCT', item['name'], json.dumps(item['attributes']))
-        )
+        data.append((item['id'], 'PRODUCT', item['name'], json.dumps(item['attributes'])))
+    
+    if DATABASE_URL and POSTGRES_AVAILABLE:
+        execute_batch(cursor, query, data)
+    else:
+        cursor.executemany(query, data)
+        
     conn.commit()
 
 # --- 2. THE SIMULATOR ENGINE ---
 
 def generate_events(conn):
-    print("📈 Generating 400 Days of Retail Reality...")
+    logger.info("📈 Generating Retail Reality...")
     events = []
     
     # Inventory State
     inv = {item['id']: 200 for item in CATALOG}
-    # Specific starting states
-    inv["PUMA-ESS-TEE-BLK"] = 5   # Phantom: stuck at 5
-    inv["PUMA-RSX-PREPPY"] = 150  # Broken: high stock, no sales
-    inv["FERRARI-RACE-JKT"] = 80  # Premium: slow mover
-    inv["MB-03-TOXIC"] = 0        # Omni: DC Empty (simulated here as primary node empty)
+    inv["PUMA-ESS-TEE-BLK"] = 5 
+    inv["PUMA-RSX-PREPPY"] = 150
+    inv["FERRARI-RACE-JKT"] = 80
+    inv["MB-03-TOXIC"] = 0
 
     cursor = conn.cursor()
     cursor.execute("DELETE FROM universal_events")
@@ -132,9 +160,7 @@ def generate_events(conn):
         curr_date = START_DATE + timedelta(days=day_offset)
         date_str = curr_date.strftime("%Y-%m-%d")
         
-        # Seasonality
         is_weekend = curr_date.weekday() >= 5
-        is_summer = 5 <= curr_date.month <= 8
         days_from_now = (datetime.now() - curr_date).days
 
         for item in CATALOG:
@@ -143,115 +169,86 @@ def generate_events(conn):
             price = item['base_price']
             
             # --- SCENARIO LOGIC ---
-            
-            # 1. VIRAL SPIKE (Recent)
             if dna == "VIRAL_SPIKE":
-                # Normal demand 10. Last 7 days -> 200!
                 base_demand = np.random.normal(10, 2)
                 if days_from_now < 7: base_demand = np.random.normal(150, 20) 
-            
-            # 2. SUPPLY SHOCK
             elif dna == "SUPPLY_SHOCK":
-                base_demand = np.random.normal(25, 5) # Steady sales
-                # Logic: Even if we reorder, stock stays low because lead time is 60d
-            
-            # 3. PHANTOM INVENTORY
+                base_demand = np.random.normal(25, 5) 
             elif dna == "PHANTOM":
-                # Demand exists (people want it), but sales are 0 because "System" thinks we have 5 but reality is 0?
-                # Actually, simulation records SALES. If phantom, Sales = 0.
                 base_demand = 0 
-                # Note: We simulate the 'Inventory Snapshot' saying 5 later.
-            
-            # 4. LOSS LEADER TRAP
             elif dna == "LOSS_LEADER":
                 base_demand = np.random.normal(30, 5)
-                # Competitor drops price below cost ($35) sometimes
                 if random.random() < 0.15:
-                    comp_price = 30.0 # Danger!
+                    comp_price = 30.0
                     events.append((str(uuid.uuid4()), sku, "COMP_PRICE", comp_price, date_str, json.dumps({"source":"CRAWLER"})))
-            
-            # 5. ELASTICITY TEST
             elif dna == "INELASTIC":
-                # We hiked price 30 days ago. Sales didn't drop.
-                if days_from_now < 30: price += 5.0 # Hike
-                base_demand = np.random.normal(20, 2) # Sales steady despite hike
-            
-            # 6. BROKEN SIZE
+                if days_from_now < 30: price += 5.0 
+                base_demand = np.random.normal(20, 2)
             elif dna == "BROKEN_SIZE":
-                base_demand = 0 # No one fits Size 13
-                # Inventory stays high
-            
-            # 7. BRAND EQUITY
+                base_demand = 0 
             elif dna == "BRAND_EQUITY":
-                base_demand = np.random.poisson(0.5) # Very slow
-                # Inventory piling up slowly
-            
-            # 8. OMNI RESCUE
+                base_demand = np.random.poisson(0.5)
             elif dna == "OMNI_RESCUE":
-                base_demand = np.random.normal(40, 5) # High Demand
-                # But Inventory is 0 at DC (Primary Node). 
-                # This causes Lost Sales in simulation unless we had store nodes (simplified here).
-            
+                base_demand = np.random.normal(40, 5)
             else:
                 base_demand = 10
 
-            # --- EXECUTE PHYSICS ---
-            
-            # Weekend Bump
+            # Physics
             if is_weekend and dna not in ["PHANTOM", "BROKEN_SIZE"]:
                 base_demand *= 1.4
 
-            # Calculate Sales
             sales = max(0, int(base_demand))
             
-            # Constraint: Inventory
-            # Special case: Phantom thinks it has 5, but actually has 0. So Sales = 0.
             if dna == "PHANTOM":
-                sales = 0 # Reality
+                sales = 0
             elif inv[sku] < sales:
                 sales = inv[sku]
             
             inv[sku] -= sales
             
             # --- LOG EVENTS ---
-            
-            # 1. Price
             events.append((str(uuid.uuid4()), sku, "PRICE", price, date_str, json.dumps({"source":"SYSTEM"})))
             
-            # 2. Sales
             if sales > 0:
                 events.append((str(uuid.uuid4()), sku, "SALES_QTY", sales, date_str, json.dumps({"source":"POS"})))
             
-            # 3. Inventory Snapshot
-            # Phantom Logic: System sees 5 units forever
             snapshot_qty = 5 if dna == "PHANTOM" else inv[sku]
             events.append((str(uuid.uuid4()), sku, "INV_SNAPSHOT", snapshot_qty, date_str, json.dumps({"source":"WMS"})))
 
-            # --- REPLENISHMENT ---
-            # Basic reorder logic to keep simulation alive
+            # Replenishment
             if dna not in ["PHANTOM", "BROKEN_SIZE", "BRAND_EQUITY", "OMNI_RESCUE"] and inv[sku] < 50:
-                inv[sku] += 200 # Restock
+                inv[sku] += 200
 
-        if day_offset % 30 == 0:
-            print(f"   ... Processed {date_str}")
+        if day_offset % 50 == 0:
+            logger.info(f"   ... Processed {date_str}")
 
-    print(f"💾 Committing {len(events)} events to database...")
+    logger.info(f"💾 Committing {len(events)} events to database...")
     
-    cursor.executemany(
-        """
+    ph = get_placeholder() # ? or %s
+    query = f"""
         INSERT INTO universal_events 
         (event_id, primary_target_id, event_type, value, timestamp, meta) 
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        events
-    )
+        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+    """
+    
+    if DATABASE_URL and POSTGRES_AVAILABLE:
+        execute_batch(cursor, query, events, page_size=1000)
+    else:
+        cursor.executemany(query, events)
+    
     conn.commit()
 
 if __name__ == "__main__":
     try:
-        with sqlite3.connect(DB_PATH) as conn:
+        logger.info(f"🌍 INITIALIZING PUMA RETAIL UNIVERSE")
+        if DATABASE_URL:
+            logger.info("🔌 Connecting to POSTGRES...")
+        else:
+            logger.info("🔌 Connecting to SQLite (Local)...")
+            
+        with get_db_connection() as conn:
             setup_catalog(conn)
             generate_events(conn)
-        print("\n✅ SIMULATION COMPLETE. The World is Ready.")
+        logger.info("\n✅ SIMULATION COMPLETE. The World is Ready.")
     except Exception as e:
-        print(f"\n❌ FATAL ERROR: {e}")
+        logger.error(f"\n❌ FATAL ERROR: {e}")

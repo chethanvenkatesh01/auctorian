@@ -46,9 +46,18 @@ app = FastAPI(
     description="The Autonomous Merchant Operating System (Local Inference Edition)"
 )
 
+# [FIX] Explicitly define origins. '*' with credentials=True is blocked by browsers.
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://0.0.0.0:3000",
+    "http://localhost:5173",  # Vite default (just in case)
+    "http://127.0.0.1:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -103,12 +112,15 @@ async def get_ontology_structure(type: Optional[str] = None):
 
 @app.post("/ontology/structure")
 async def update_ontology_structure(payload: Dict[str, Any]):
-    # Placeholder to satisfy frontend POST requests
-    return {"status": "success", "message": "Structure definition acknowledged"}
+    """
+    [FIXED] Accepts structure updates from the Frontend.
+    Required to prevent 405 Method Not Allowed errors.
+    """
+    return domain_mgr.save_structure(payload.get('entity', 'PRODUCT'), payload.get('fields', []))
 
 
 # ==============================================================================
-# 3. ML & INTELLIGENCE ENDPOINTS (Fixed 404s)
+# 3. ML & INTELLIGENCE ENDPOINTS
 # ==============================================================================
 
 @app.post("/ml/train")
@@ -126,7 +138,7 @@ async def predict(sku: str, days: int = 7):
 @app.get("/ml/explain/{sku}")
 async def explain_forecast(sku: str):
     """
-    [NEW] Fixes the 404. Returns the Analyst Narrative for a specific SKU.
+    Returns the Analyst Narrative for a specific SKU.
     """
     if not ml_engine: 
         return {"error": "ML Engine Offline"}
@@ -164,19 +176,13 @@ async def get_accuracy(node_id: str):
 
 @app.get("/ml/audit")
 async def get_ml_audit_log():
-    """
-    [NEW] Serves the Glass Box data (Feature Importance, etc).
-    Populates the 'GlassBoxModal'.
-    """
+    """Serves the Glass Box data."""
     if not ml_engine: return {}
     return ml_engine.get_audit_log()
 
 @app.get("/ml/accuracy_matrix")
 async def get_ml_accuracy_matrix():
-    """
-    [NEW] Serves the Matrix data (Lags vs WMAPE).
-    Populates the 'ForecastAccuracyWidget'.
-    """
+    """Serves the Matrix data."""
     if not ml_engine: return []
     return ml_engine.get_accuracy_matrix()
 

@@ -8,9 +8,8 @@ logger = logging.getLogger("DOMAIN_MANAGER")
 
 class DomainManager:
     """
-    Guardian of the Universal Graph (v4.0 - Polyglot).
-    Manages the flexible Ontology (Objects, Events, Relationships).
-    Supports both SQLite (Dev) and Postgres (Prod).
+    Guardian of the Universal Graph (v4.1 - Introspective).
+    Manages the flexible Ontology and infers Schema from live data.
     """
     def __init__(self, db_path="ados_ledger.db"):
         self.db_path = db_path
@@ -25,8 +24,6 @@ class DomainManager:
         """Performance optimizations for the Graph."""
         conn = get_db_connection(self.db_path)
         try:
-            # Postgres creates indices differently, but standard SQL usually works.
-            # We wrap in try/except to be safe across dialects.
             cmds = [
                 "CREATE INDEX IF NOT EXISTS idx_evt_agg ON universal_events(event_type, timestamp)",
                 "CREATE INDEX IF NOT EXISTS idx_obj_lookup ON universal_objects(obj_type, obj_id)"
@@ -54,29 +51,23 @@ class DomainManager:
     def get_objects(self, obj_type: str) -> List[Dict]:
         """Fetches Nouns (Products, Locations) from the Universal Store."""
         conn = get_db_connection(self.db_path)
-        ph = get_placeholder() # ? or %s
+        ph = get_placeholder()
         
         try:
-            # Unified Query Execution
             if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
-                # Postgres (RealDictCursor behavior)
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(f"SELECT * FROM universal_objects WHERE obj_type = {ph}", (obj_type,))
                     rows = cur.fetchall()
-                    # Convert RealDictRow to dict
                     results = [dict(r) for r in rows]
             else:
-                # SQLite (Row factory behavior)
                 rows = conn.execute(f"SELECT * FROM universal_objects WHERE obj_type = {ph}", (obj_type,)).fetchall()
                 results = [dict(r) for r in rows]
 
-            # JSON Parsing
             final_list = []
             for item in results:
                 if item.get('attributes'):
                     try:
-                        # Postgres JSONB might already be a dict, SQLite is string
                         attrs = item['attributes']
                         if isinstance(attrs, str):
                             attrs = json.loads(attrs)
@@ -84,7 +75,63 @@ class DomainManager:
                     except: pass
                 final_list.append(item)
             return final_list
+        finally:
+            conn.close()
+
+    def get_structure(self, obj_type: str = None) -> Dict[str, Any]:
+        """
+        🔮 INTROSPECTION ENGINE
+        Scans the actual data in Postgres to reverse-engineer the Ontology.
+        This allows 'simulate_decision_day.py' to automatically define the Data Contracts.
+        """
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder()
+        
+        target_type = obj_type if obj_type else 'PRODUCT'
+        
+        try:
+            # 1. Fetch a sample of objects to infer schema
+            query = f"SELECT attributes FROM universal_objects WHERE obj_type = {ph} LIMIT 50"
             
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                with conn.cursor() as cur:
+                    cur.execute(query, (target_type,))
+                    rows = cur.fetchall()
+                    # Postgres returns tuple like ({...},) or ('{...}',)
+                    samples = [r[0] for r in rows]
+            else:
+                rows = conn.execute(query, (target_type,)).fetchall()
+                samples = [r[0] for r in rows]
+
+            # 2. Infer Fields
+            fields_map = {}
+            for s in samples:
+                data = s if isinstance(s, dict) else json.loads(s)
+                for key, val in data.items():
+                    if key not in fields_map:
+                        fields_map[key] = {"name": key, "types": set(), "sample": val}
+                    fields_map[key]["types"].add(type(val).__name__)
+
+            # 3. Format for Frontend
+            field_list = []
+            for k, v in fields_map.items():
+                field_list.append({
+                    "name": k,
+                    "type": list(v["types"])[0], # Simplified type inference
+                    "required": True,
+                    "description": f"Inferred from data. Sample: {v['sample']}"
+                })
+
+            return {
+                "entity": target_type,
+                "field_count": len(field_list),
+                "fields": field_list,
+                "status": "LIVE_INFERENCE"
+            }
+            
+        except Exception as e:
+            logger.error(f"Structure inference failed: {e}")
+            return {"entity": target_type, "fields": [], "error": str(e)}
         finally:
             conn.close()
 
@@ -140,10 +187,8 @@ class DomainManager:
     # =========================================================
 
     def get_table(self, level_name: str) -> List[Dict]:
-        """Legacy Adapter: Maps 'universal_objects' -> old 'nodes' format."""
         obj_type = level_name
         objects = self.get_objects(obj_type)
-        
         adapted = []
         for o in objects:
             row = {
@@ -157,21 +202,16 @@ class DomainManager:
         return adapted
 
     def get_metrics(self, limit=100, offset=0, metric_filter=None) -> List[Dict]:
-        """Legacy Adapter: Maps 'universal_events' -> old 'node_metrics' format."""
         conn = get_db_connection(self.db_path)
         ph = get_placeholder()
-        
         try:
             query = "SELECT * FROM universal_events"
             params = []
-            
             if metric_filter and metric_filter != 'TRANSACTIONS':
                 query += f" WHERE event_type LIKE {ph}"
                 params.append(f"{metric_filter}%")
-            
             query += f" ORDER BY timestamp DESC LIMIT {limit} OFFSET {offset}"
             
-            # Execute
             if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
                 from psycopg2.extras import RealDictCursor
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:

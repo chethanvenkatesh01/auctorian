@@ -162,6 +162,24 @@ async def get_accuracy(node_id: str):
         "accuracy": int(metrics.get("r2_score", 0.85) * 100)
     }
 
+@app.get("/ml/audit")
+async def get_ml_audit_log():
+    """
+    [NEW] Serves the Glass Box data (Feature Importance, etc).
+    Populates the 'GlassBoxModal'.
+    """
+    if not ml_engine: return {}
+    return ml_engine.get_audit_log()
+
+@app.get("/ml/accuracy_matrix")
+async def get_ml_accuracy_matrix():
+    """
+    [NEW] Serves the Matrix data (Lags vs WMAPE).
+    Populates the 'ForecastAccuracyWidget'.
+    """
+    if not ml_engine: return []
+    return ml_engine.get_accuracy_matrix()
+
 
 # ==============================================================================
 # 4. DECISION ORCHESTRATION

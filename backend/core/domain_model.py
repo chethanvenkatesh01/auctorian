@@ -1,15 +1,16 @@
-import sqlite3
 import json
-import uuid
+import logging
 from typing import List, Dict, Optional, Any
-# FIX: Import the initialization function instead of the missing variable
-from .sql_schema import init_db 
+# IMPORTS FROM THE NEW SHARED SCHEMA MODULE
+from .sql_schema import init_db, get_db_connection, get_placeholder, POSTGRES_AVAILABLE
+
+logger = logging.getLogger("DOMAIN_MANAGER")
 
 class DomainManager:
     """
-    Guardian of the Universal Graph (v3.0).
+    Guardian of the Universal Graph (v4.0 - Polyglot).
     Manages the flexible Ontology (Objects, Events, Relationships).
-    Includes Compatibility Adapters for v1 Frontend calls.
+    Supports both SQLite (Dev) and Postgres (Prod).
     """
     def __init__(self, db_path="ados_ledger.db"):
         self.db_path = db_path
@@ -17,127 +18,173 @@ class DomainManager:
         self._ensure_indices()
 
     def _init_db(self):
-        """Initializes the new Graph Schema."""
-        # FIX: Delegate schema creation to the sql_schema module
+        """Initializes the Graph Schema via the shared factory."""
         init_db(self.db_path)
 
     def _ensure_indices(self):
         """Performance optimizations for the Graph."""
-        with sqlite3.connect(self.db_path) as conn:
-            # Fast lookup for Time-Series aggregations
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_evt_agg ON universal_events(event_type, timestamp)")
-            # Fast lookup for Object attributes
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_obj_lookup ON universal_objects(obj_type, obj_id)")
-            conn.commit()
+        conn = get_db_connection(self.db_path)
+        try:
+            # Postgres creates indices differently, but standard SQL usually works.
+            # We wrap in try/except to be safe across dialects.
+            cmds = [
+                "CREATE INDEX IF NOT EXISTS idx_evt_agg ON universal_events(event_type, timestamp)",
+                "CREATE INDEX IF NOT EXISTS idx_obj_lookup ON universal_objects(obj_type, obj_id)"
+            ]
+            
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                with conn.cursor() as cur:
+                    for cmd in cmds:
+                        try: cur.execute(cmd)
+                        except: pass
+                conn.commit()
+            else:
+                for cmd in cmds:
+                    conn.execute(cmd)
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Index creation skipped: {e}")
+        finally:
+            conn.close()
 
     # =========================================================
-    # 1. NEW UNIVERSAL GRAPH API (The Future)
+    # 1. UNIVERSAL GRAPH API
     # =========================================================
 
     def get_objects(self, obj_type: str) -> List[Dict]:
         """Fetches Nouns (Products, Locations) from the Universal Store."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT * FROM universal_objects WHERE obj_type = ?", 
-                (obj_type,)
-            ).fetchall()
-            
-            results = []
-            for r in rows:
-                item = dict(r)
-                # Unpack JSON attributes for easier consumption
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder() # ? or %s
+        
+        try:
+            # Unified Query Execution
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                # Postgres (RealDictCursor behavior)
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(f"SELECT * FROM universal_objects WHERE obj_type = {ph}", (obj_type,))
+                    rows = cur.fetchall()
+                    # Convert RealDictRow to dict
+                    results = [dict(r) for r in rows]
+            else:
+                # SQLite (Row factory behavior)
+                rows = conn.execute(f"SELECT * FROM universal_objects WHERE obj_type = {ph}", (obj_type,)).fetchall()
+                results = [dict(r) for r in rows]
+
+            # JSON Parsing
+            final_list = []
+            for item in results:
                 if item.get('attributes'):
                     try:
-                        attrs = json.loads(item['attributes'])
+                        # Postgres JSONB might already be a dict, SQLite is string
+                        attrs = item['attributes']
+                        if isinstance(attrs, str):
+                            attrs = json.loads(attrs)
                         item.update(attrs)
                     except: pass
-                results.append(item)
-            return results
+                final_list.append(item)
+            return final_list
+            
+        finally:
+            conn.close()
 
     def get_events(self, event_type: str, target_id: str = None, limit: int = 100) -> List[Dict]:
         """Fetches Verbs (Sales, Prices) from the Event Store."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            query = "SELECT * FROM universal_events WHERE event_type = ?"
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder()
+        
+        try:
+            query = f"SELECT * FROM universal_events WHERE event_type = {ph}"
             params = [event_type]
             
             if target_id:
-                query += " AND primary_target_id = ?"
+                query += f" AND primary_target_id = {ph}"
                 params.append(target_id)
             
-            query += " ORDER BY timestamp DESC LIMIT ?"
-            params.append(limit)
+            query += f" ORDER BY timestamp DESC LIMIT {limit}"
             
-            rows = conn.execute(query, params).fetchall()
-            return [dict(r) for r in rows]
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(query, tuple(params))
+                    rows = cur.fetchall()
+                    return [dict(r) for r in rows]
+            else:
+                rows = conn.execute(query, tuple(params)).fetchall()
+                return [dict(r) for r in rows]
+        finally:
+            conn.close()
 
     def get_stats(self):
         """Telemetry for the Command Center."""
-        with sqlite3.connect(self.db_path) as conn:
-            try:
+        conn = get_db_connection(self.db_path)
+        try:
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                 with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM universal_objects")
+                    objs = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM universal_events")
+                    evts = cur.fetchone()[0]
+            else:
                 objs = conn.execute("SELECT COUNT(*) FROM universal_objects").fetchone()[0]
                 evts = conn.execute("SELECT COUNT(*) FROM universal_events").fetchone()[0]
-                return {"objects": objs, "events": evts, "status": "Graph Active"}
-            except:
-                return {"objects": 0, "events": 0, "status": "Graph Empty"}
+            
+            return {"objects": objs, "events": evts, "status": "Graph Active"}
+        except:
+            return {"objects": 0, "events": 0, "status": "Graph Empty"}
+        finally:
+            conn.close()
 
     # =========================================================
-    # 2. LEGACY COMPATIBILITY LAYER (The Bridge)
-    # Adapts the new Graph Schema to the old 'nodes'/'metrics' format
-    # so the Frontend and Orchestrator don't break immediately.
+    # 2. LEGACY COMPATIBILITY LAYER
     # =========================================================
 
     def get_table(self, level_name: str) -> List[Dict]:
-        """
-        Legacy Adapter: Maps 'universal_objects' -> old 'nodes' format.
-        Called by Data Explorer.
-        """
-        # Map old types to new generic types if necessary, or just pass through
-        obj_type = level_name  # e.g., 'PRODUCT', 'LOCATION'
-        
+        """Legacy Adapter: Maps 'universal_objects' -> old 'nodes' format."""
+        obj_type = level_name
         objects = self.get_objects(obj_type)
         
-        # Transform to match old 'nodes' schema expected by UI
         adapted = []
         for o in objects:
             row = {
                 "node_id": o['obj_id'],
                 "name": o['name'],
                 "type": o['obj_type'],
-                "parent_id": o.get('parent_id'), # Might be missing in flat object store
-                # Flatten attributes
+                "parent_id": o.get('parent_id'), 
                 **{k: v for k, v in o.items() if k not in ['obj_id', 'obj_type', 'name', 'attributes']}
             }
             adapted.append(row)
         return adapted
 
     def get_metrics(self, limit=100, offset=0, metric_filter=None) -> List[Dict]:
-        """
-        Legacy Adapter: Maps 'universal_events' -> old 'node_metrics' format.
-        Called by Data Plane View.
-        """
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            
+        """Legacy Adapter: Maps 'universal_events' -> old 'node_metrics' format."""
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder()
+        
+        try:
             query = "SELECT * FROM universal_events"
             params = []
             
             if metric_filter and metric_filter != 'TRANSACTIONS':
-                query += " WHERE event_type LIKE ?"
+                query += f" WHERE event_type LIKE {ph}"
                 params.append(f"{metric_filter}%")
             
-            query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
-            params.extend([limit, offset])
+            query += f" ORDER BY timestamp DESC LIMIT {limit} OFFSET {offset}"
             
-            rows = conn.execute(query, params).fetchall()
+            # Execute
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(query, tuple(params))
+                    rows = cur.fetchall()
+                    rows = [dict(r) for r in rows]
+            else:
+                rows = conn.execute(query, tuple(params)).fetchall()
+                rows = [dict(r) for r in rows]
             
             adapted = []
             for r in rows:
-                # FIX: Handle missing secondary_target_id in new schema
-                loc_id = r['secondary_target_id'] if 'secondary_target_id' in r.keys() else None
-                
-                # Map Graph Event -> Old Metric Row
+                loc_id = r.get('secondary_target_id')
                 adapted.append({
                     "node_id": r['primary_target_id'],
                     "location_id": loc_id,
@@ -146,29 +193,35 @@ class DomainManager:
                     "value": r['value']
                 })
             return adapted
+        finally:
+            conn.close()
 
     def get_levels(self, tree_type: str = "PRODUCT") -> List[str]:
-        """
-        Mock Adapter: Returns standard levels since we don't use the old hierarchy table anymore.
-        """
-        if tree_type == "PRODUCT":
-            return ["Category", "SubCategory", "SKU"]
-        elif tree_type == "LOCATION":
-            return ["Region", "District", "Store"]
+        if tree_type == "PRODUCT": return ["Category", "SubCategory", "SKU"]
+        elif tree_type == "LOCATION": return ["Region", "District", "Store"]
         return ["Level 1", "Level 2"]
 
-    # Helper for Orchestrator (Migration)
     def define_levels(self, levels, tree_type):
-        pass # No-op in new schema
+        pass 
 
     def add_node(self, node_id, name, node_type, parent_id=None, scenario="LIVE"):
-        """Legacy helper for single node insertion (used by old tests)."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO universal_objects (obj_id, obj_type, name, attributes) VALUES (?,?,?,?)",
-                (node_id, node_type, name, json.dumps({"parent_id": parent_id}))
-            )
-            conn.commit()
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder()
+        try:
+            query = f"INSERT INTO universal_objects (obj_id, obj_type, name, attributes) VALUES ({ph},{ph},{ph},{ph})"
+            params = (node_id, node_type, name, json.dumps({"parent_id": parent_id}))
+            
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                 with conn.cursor() as cur:
+                    cur.execute(query, params)
+                 conn.commit()
+            else:
+                conn.execute(query, params)
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to add node: {e}")
+        finally:
+            conn.close()
 
 # Singleton Instance
 domain_mgr = DomainManager()

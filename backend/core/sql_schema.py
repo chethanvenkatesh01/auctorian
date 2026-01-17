@@ -18,10 +18,11 @@ except ImportError:
 # If this Env Var is set (by Docker), we use Postgres. Otherwise, SQLite.
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-INIT_STMTS = [
-    # =========================================================
-    # 1. CORE UNIVERSAL LEDGER (THE SOURCE OF TRUTH)
-    # =========================================================
+# =========================================================
+# 1. SQLITE SCHEMA (Simple / Dev Mode)
+# =========================================================
+SQLITE_INIT = [
+    # Core Objects
     """
     CREATE TABLE IF NOT EXISTS universal_objects (
         obj_id TEXT PRIMARY KEY,
@@ -31,6 +32,7 @@ INIT_STMTS = [
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    # Core Events
     """
     CREATE TABLE IF NOT EXISTS universal_events (
         event_id TEXT PRIMARY KEY,
@@ -41,11 +43,66 @@ INIT_STMTS = [
         meta JSON, 
         FOREIGN KEY(primary_target_id) REFERENCES universal_objects(obj_id)
     )
+    """
+]
+
+# =========================================================
+# 2. POSTGRES SCHEMA (Enterprise / Partitioned)
+# =========================================================
+# We use Declarative Partitioning to split data physically while keeping
+# logical unity. This allows for infinite scaling.
+POSTGRES_INIT = [
+    # --- A. OBJECTS (Partitioned by Type) ---
+    """
+    CREATE TABLE IF NOT EXISTS universal_objects (
+        obj_id TEXT NOT NULL,
+        obj_type TEXT NOT NULL, 
+        name TEXT,
+        attributes JSONB, 
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (obj_type, obj_id)
+    ) PARTITION BY LIST (obj_type);
     """,
+    # Partition 1: Products (Physical Table: objects_product)
+    "CREATE TABLE IF NOT EXISTS objects_product PARTITION OF universal_objects FOR VALUES IN ('PRODUCT');",
+    # Partition 2: Locations (Physical Table: objects_location)
+    "CREATE TABLE IF NOT EXISTS objects_location PARTITION OF universal_objects FOR VALUES IN ('LOCATION');",
+    # Partition 3: Customers (Physical Table: objects_customer)
+    "CREATE TABLE IF NOT EXISTS objects_customer PARTITION OF universal_objects FOR VALUES IN ('CUSTOMER');",
+    # Partition 4: Catch-All (For Suppliers, Competitors, etc)
+    "CREATE TABLE IF NOT EXISTS objects_default PARTITION OF universal_objects DEFAULT;",
+
+    # --- B. EVENTS (Partitioned by Type - Optimized for Analytics) ---
+    """
+    CREATE TABLE IF NOT EXISTS universal_events (
+        event_id TEXT NOT NULL,
+        primary_target_id TEXT NOT NULL,
+        event_type TEXT NOT NULL, 
+        value DOUBLE PRECISION,
+        timestamp TIMESTAMP,
+        meta JSONB,
+        PRIMARY KEY (event_type, event_id)
+    ) PARTITION BY LIST (event_type);
+    """,
+    # Partition 1: High Volume Transaction Data (The Big One)
+    "CREATE TABLE IF NOT EXISTS events_sales PARTITION OF universal_events FOR VALUES IN ('SALES_QTY');",
+    # Partition 2: Inventory Snapshots
+    "CREATE TABLE IF NOT EXISTS events_inventory PARTITION OF universal_events FOR VALUES IN ('INV_SNAPSHOT');",
+    # Partition 3: Pricing Signals
+    "CREATE TABLE IF NOT EXISTS events_pricing PARTITION OF universal_events FOR VALUES IN ('PRICE', 'COMP_PRICE', 'PROMO_FLAG');",
+    # Partition 4: Everything Else (Logs, Audits)
+    "CREATE TABLE IF NOT EXISTS events_default PARTITION OF universal_events DEFAULT;",
     
-    # =========================================================
-    # 2. FINANCIAL LEDGER (THE BANK)
-    # =========================================================
+    # --- INDICES (Critical for Performance) ---
+    "CREATE INDEX IF NOT EXISTS idx_evt_time ON universal_events(timestamp);",
+    "CREATE INDEX IF NOT EXISTS idx_evt_target ON universal_events(primary_target_id);"
+]
+
+# =========================================================
+# 3. COMMON TABLES (Shared across both engines)
+# =========================================================
+COMMON_INIT = [
+    # Financial Ledger
     """
     CREATE TABLE IF NOT EXISTS ledger_entries (
         entry_id TEXT PRIMARY KEY,
@@ -57,10 +114,7 @@ INIT_STMTS = [
         meta JSON
     )
     """,
-    
-    # =========================================================
-    # 3. GOVERNANCE (THE LAW)
-    # =========================================================
+    # Governance Policies
     """
     CREATE TABLE IF NOT EXISTS policy_store (
         policy_key TEXT PRIMARY KEY, 
@@ -70,10 +124,7 @@ INIT_STMTS = [
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
-
-    # =========================================================
-    # 4. INTELLIGENCE PLANE (THE BRAIN)
-    # =========================================================
+    # Intelligence: Demand Hypercube
     """
     CREATE TABLE IF NOT EXISTS demand_hypercube (
         id TEXT PRIMARY KEY,
@@ -85,10 +136,10 @@ INIT_STMTS = [
         base_demand INTEGER, 
         elasticity_coeff REAL, 
         elasticity_vector JSON, 
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(sku_id) REFERENCES universal_objects(obj_id)
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    # Intelligence: Audit Log
     """
     CREATE TABLE IF NOT EXISTS forecast_audit_log (
         audit_id TEXT PRIMARY KEY,
@@ -99,10 +150,10 @@ INIT_STMTS = [
         cleansing_log JSON,
         feature_manifest JSON,
         tournament_results JSON,
-        driver_importance JSON,
-        FOREIGN KEY(sku_id) REFERENCES universal_objects(obj_id)
+        driver_importance JSON
     )
     """,
+    # Intelligence: Snapshots
     """
     CREATE TABLE IF NOT EXISTS forecast_snapshots (
         snapshot_id TEXT PRIMARY KEY,
@@ -110,10 +161,10 @@ INIT_STMTS = [
         target_date TEXT NOT NULL, 
         generated_at TEXT NOT NULL, 
         lag_weeks INTEGER, 
-        forecast_qty INTEGER,
-        FOREIGN KEY(sku_id) REFERENCES universal_objects(obj_id)
+        forecast_qty INTEGER
     )
     """,
+    # Intelligence: Accuracy Matrix
     """
     CREATE TABLE IF NOT EXISTS accuracy_matrix (
         node_id TEXT, 
@@ -124,10 +175,7 @@ INIT_STMTS = [
         PRIMARY KEY (node_id, lag_bucket)
     )
     """,
-    
-    # =========================================================
-    # 5. PLANNING PLANE (THE HUMAN LAYER)
-    # =========================================================
+    # Planning: Human Overrides
     """
     CREATE TABLE IF NOT EXISTS plan_overrides (
         id TEXT PRIMARY KEY,
@@ -169,23 +217,26 @@ def get_placeholder():
 def init_db(db_path="ados_ledger.db"):
     """
     Initializes the database with the full Auctorian Schema.
-    Now supports both Postgres and SQLite.
+    Now supports both Postgres (Partitioned) and SQLite (Simple).
     """
     conn = get_db_connection(db_path)
     
     try:
         if DATABASE_URL and POSTGRES_AVAILABLE:
-            # Postgres Logic
+            # --- POSTGRES LOGIC ---
             with conn.cursor() as cur:
-                for stmt in INIT_STMTS:
+                # 1. Execute Core Partitioned Schema
+                for stmt in POSTGRES_INIT:
                     # Postgres doesn't strictly need JSON type mapping for table creation
-                    # as long as we use standard SQL.
+                    cur.execute(stmt)
+                # 2. Execute Common Tables
+                for stmt in COMMON_INIT:
                     cur.execute(stmt)
             conn.commit()
-            logger.info(f"✅ [STORAGE] Postgres Schema Initialized via DATABASE_URL.")
+            logger.info(f"✅ [STORAGE] Postgres Enterprise Schema (Partitioned) Initialized via DATABASE_URL.")
         else:
-            # SQLite Logic
-            for stmt in INIT_STMTS:
+            # --- SQLITE LOGIC ---
+            for stmt in SQLITE_INIT + COMMON_INIT:
                 try:
                     conn.execute(stmt)
                 except Exception as e:

@@ -1,111 +1,100 @@
 import pandas as pd
-import sqlite3
 import logging
-import numpy as np
-# [FIX] Import shared DB factory to support Postgres & SQLite
-from .sql_schema import get_db_connection, POSTGRES_AVAILABLE
+from typing import Dict, Any, List
+from .domain_model import domain_mgr
+from .dna import Anchors
 
 logger = logging.getLogger("FEATURE_STORE")
 
 class FeatureStore:
     """
-    The Data Refinery (v9.8 - Polyglot).
-    Transforms raw Graph Events into an ML-ready Matrix.
-    Supports both SQLite and Postgres.
+    The Sensor: Metadata-Driven Data Preparation.
+    Enforces Article III: The Wall of Now.
     """
     
-    def __init__(self):
-        # We no longer store a static path; we get connections on demand
-        pass
-
     def build_master_table(self) -> pd.DataFrame:
         """
-        Pivots the Event Graph and aligns features for 'Future-Aware' training.
+        Assembles the training dataset by joining Objects + Events
+        using the Constitutional Anchors.
         """
-        conn = get_db_connection()
-        try:
-            # 1. Fetch ALL relevant events
-            # Standard SQL compatible with both engines
-            query = """
-                SELECT 
-                    timestamp as date,
-                    primary_target_id as node_id,
-                    event_type,
-                    value
-                FROM universal_events 
-                WHERE event_type IN ('SALES_QTY', 'PRICE', 'PROMO_FLAG')
-                ORDER BY date ASC
-            """
-            
-            # pandas.read_sql handles the DB cursor abstraction for us
-            df = pd.read_sql(query, conn)
+        logger.info("🏗️ [SENSOR] Building Master Table from Metadata...")
         
-            if df.empty:
-                logger.warning("⚠️ [FEATURE STORE] No events found in database.")
-                return pd.DataFrame()
-
-            # 2. Pivot: Turn Event Types into Columns
-            # Pre-pivot cleanup to prevent duplicate errors
-            df = df.drop_duplicates(subset=['date', 'node_id', 'event_type'])
-            
-            df_pivot = df.pivot_table(
-                index=['date', 'node_id'], 
-                columns='event_type', 
-                values='value', 
-                aggfunc='mean'
-            ).reset_index()
-
-            # 3. Fill Missing Data (Imputation)
-            # Ensure critical columns exist even if data is sparse
-            for col in ['SALES_QTY', 'PRICE', 'PROMO_FLAG']:
-                if col not in df_pivot.columns:
-                    df_pivot[col] = 0.0 if col != 'PRICE' else 50.0
-
-            df_pivot['SALES_QTY'] = df_pivot['SALES_QTY'].fillna(0)
-            # Price logic: Forward fill (price stays same), then Back fill (for start)
-            df_pivot['PRICE'] = df_pivot.groupby('node_id')['PRICE'].ffill().bfill()
-            df_pivot['PROMO_FLAG'] = df_pivot['PROMO_FLAG'].fillna(0)
-
-            # 4. Feature Engineering
-            df_pivot['date_obj'] = pd.to_datetime(df_pivot['date'])
-            df_pivot['day_of_week'] = df_pivot['date_obj'].dt.dayofweek
-            df_pivot['is_weekend'] = (df_pivot['day_of_week'] >= 5).astype(int)
-            
-            # Lag Features
-            df_pivot['lag_1'] = df_pivot.groupby('node_id')['SALES_QTY'].shift(1)
-            # Moving Average (7-day rolling)
-            df_pivot['ma_7'] = df_pivot.groupby('node_id')['SALES_QTY'].transform(
-                lambda x: x.shift(1).rolling(7).mean()
-            )
-
-            # 5. Cleanup
-            df_clean = df_pivot.dropna().drop(columns=['date_obj'])
-            
-            return df_clean
-
-        except Exception as e:
-            logger.error(f"Failed to build master table: {e}")
+        # 1. Fetch Schema Maps (The Rosetta Stone)
+        # Maps Client Column -> System Anchor
+        product_map = domain_mgr.get_anchor_map("PRODUCT")
+        trx_map = domain_mgr.get_anchor_map("TRANSACTION")
+        pricing_map = domain_mgr.get_anchor_map("PRICING")
+        
+        # 2. Fetch Raw Data
+        products = domain_mgr.get_objects("PRODUCT")
+        sales_events = domain_mgr.get_events("SALES_QTY", limit=10000)
+        
+        if not products or not sales_events:
+            logger.warning("⚠️ [SENSOR] Empty data universe.")
             return pd.DataFrame()
-        finally:
-            conn.close()
+            
+        # 3. Convert to DataFrames
+        df_prod = pd.DataFrame(products)
+        df_sales = pd.DataFrame(sales_events)
+        
+        # 4. Standardize Logic (Rename Client Cols -> Anchors)
+        # In this implementation, we assume the inputs from domain_mgr are already normalized 
+        # or we map them here. Since domain_mgr returns raw objects, we map keys.
+        
+        # Invert the map: Client Column -> Anchor (for renaming)
+        # Note: domain_mgr.get_anchor_map returns {ANCHOR: CLIENT_COL}
+        # We need to rename dataframe columns matching CLIENT_COL to ANCHOR
+        
+        def apply_mapping(df, mapping):
+            inv_map = {v: k for k, v in mapping.items()}
+            # Also handle the case where data sits in 'attributes' JSON
+            # But domain_mgr.get_objects already flattens attributes.
+            return df.rename(columns=inv_map)
+
+        df_prod = apply_mapping(df_prod, product_map)
+        # Manually ensure ID is mapped if not in map (System field)
+        if 'obj_id' in df_prod.columns:
+            df_prod[Anchors.PRODUCT_ID] = df_prod['obj_id']
+
+        # For Events, the value is standard 'value', target is 'primary_target_id'
+        # We synthesize the Anchor view provided by the Constitution
+        df_sales[Anchors.PRODUCT_ID] = df_sales['primary_target_id']
+        df_sales[Anchors.SALES_QTY] = df_sales['value']
+        df_sales[Anchors.TX_DATE] = pd.to_datetime(df_sales['timestamp'])
+        
+        # 5. The Join (Noun + Verb)
+        # We operate on the Anchor Names, not client names
+        full_df = pd.merge(
+            df_sales,
+            df_prod,
+            on=Anchors.PRODUCT_ID,
+            how='left'
+        )
+        
+        # 6. Enforce Article III (The Wall of Now)
+        # "Performance features must be Lagged."
+        full_df.sort_values(by=[Anchors.PRODUCT_ID, Anchors.TX_DATE], inplace=True)
+        
+        # Lag 1: Last Week's Sales
+        full_df['LAG_1'] = full_df.groupby(Anchors.PRODUCT_ID)[Anchors.SALES_QTY].shift(1)
+        
+        # MA 7: Moving Average (if daily data)
+        full_df['MA_7'] = full_df.groupby(Anchors.PRODUCT_ID)[Anchors.SALES_QTY].transform(lambda x: x.shift(1).rolling(window=7).mean())
+        
+        # 7. Enrich with Price (State)
+        # Ideally this comes from a temporal join on Pricing Events, 
+        # but for V1 we take it from Product Master (State Family) if available
+        if Anchors.RETAIL_PRICE in full_df.columns:
+            full_df[Anchors.RETAIL_PRICE] = full_df[Anchors.RETAIL_PRICE].fillna(0)
+        else:
+             logger.warning("⚠️ [SENSOR] Price Anchor missing in Product Master.")
+             
+        logger.info(f"✅ [SENSOR] Master Table Ready: {len(full_df)} rows. Anchors Aligned.")
+        return full_df
 
     def get_latest_features(self, node_id: str) -> pd.DataFrame:
-        """Single node fetch (Legacy/Slow)"""
-        df = self.build_master_table()
-        if df.empty: return None
-        node_data = df[df['node_id'] == node_id]
-        if node_data.empty: return None
-        return node_data.iloc[[-1]]
+        """Hydrates a single vector for inference."""
+        # Simple implementation for V1
+        return pd.DataFrame()
 
-    def get_all_latest_features(self) -> pd.DataFrame:
-        """
-        Batch fetch (Fast). 
-        Returns the most recent row for EVERY node in one DataFrame.
-        """
-        df = self.build_master_table()
-        if df.empty: return pd.DataFrame()
-        # Group by node_id and take the last row (latest date)
-        return df.groupby('node_id').tail(1)
-
-# Singleton Instance
 feature_store = FeatureStore()

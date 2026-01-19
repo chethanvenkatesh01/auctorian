@@ -102,6 +102,31 @@ POSTGRES_INIT = [
 # 3. COMMON TABLES (Shared across both engines)
 # =========================================================
 COMMON_INIT = [
+    # Metadata: The Schema Registry (Article II & IV Enforcement)
+    """
+    CREATE TABLE IF NOT EXISTS schema_registry (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, -- SQLite auto-inc, Postgres maps to SERIAL
+        entity_type TEXT NOT NULL, 
+        source_column_name TEXT NOT NULL, 
+        generic_anchor TEXT, -- Maps to Anchors in dna.py
+        family_type TEXT NOT NULL, -- INTRINSIC, STATE, etc.
+        is_pk BOOLEAN DEFAULT 0,
+        is_attribute BOOLEAN DEFAULT 1,
+        is_hierarchy BOOLEAN DEFAULT 0,
+        hierarchy_level INTEGER,
+        formula TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    # Governance: System Lock
+    """
+    CREATE TABLE IF NOT EXISTS system_config (
+        config_key TEXT PRIMARY KEY,
+        config_value TEXT,
+        description TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
     # Financial Ledger
     """
     CREATE TABLE IF NOT EXISTS ledger_entries (

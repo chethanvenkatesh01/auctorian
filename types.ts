@@ -179,3 +179,34 @@ export interface ForecastResult {
     forecast: { date: string; value: number; lower: number; upper: number }[];
     confidence: number;
 }
+
+// =============================================================================
+// 7. CONSTITUTIONAL SCHEMA TYPES (Auctorian DNA)
+// =============================================================================
+
+export enum ConstitutionalFamily {
+  INTRINSIC = "INTRINSIC",       // What it IS (Brand, Category)
+  STATE = "STATE",               // What it HAS (Price, Inventory)
+  PERFORMANCE = "PERFORMANCE",   // What it DID (Sales, Margin)
+  ENVIRONMENTAL = "ENVIRONMENTAL" // What happened TO it (Weather, Comp Price)
+}
+
+export interface SchemaField {
+  name: string;                    // Source column name from CSV
+  generic_anchor?: string;         // System anchor (e.g., 'ANCHOR_RETAIL_PRICE')
+  family_type: ConstitutionalFamily;
+  is_pk?: boolean;
+  is_attribute?: boolean;
+  is_hierarchy?: boolean;
+  hierarchy_level?: number;
+  formula?: string;
+}
+
+export interface AnchorDefinition {
+  anchor: string;                  // e.g., 'ANCHOR_RETAIL_PRICE'
+  label: string;                   // Display name: 'Retail Price'
+  family: ConstitutionalFamily;
+  mandatory: boolean;
+  description: string;
+  unlocks?: string;                // Gamification: 'Revenue Physics'
+}

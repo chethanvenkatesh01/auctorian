@@ -28,6 +28,14 @@ class Anchors:
     SALES_VAL = "ANCHOR_SALES_VAL"
     TX_DATE = "ANCHOR_DATE"
 
+# Aggregation Rules: How to roll up Anchors during Hierarchy Aggregation
+ANCHOR_AGGREGATION_RULES = {
+    "ANCHOR_RETAIL_PRICE": "mean",  # Average price across Category
+    "ANCHOR_SALES_QTY": "sum",      # Total quantity sold
+    "ANCHOR_SALES_VAL": "sum",      # Total revenue
+    "ANCHOR_STOCK_ON_HAND": "sum"   # Total inventory
+}
+
 # The Constitution
 RETAIL_STANDARDS: Dict[str, Dict] = {
     "PRODUCT": {

@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Sparkles, ShieldCheck, Loader } from 'lucide-react';
-import { api } from '../services/api';
+import React, { useEffect, useState } from 'react';
 import { IngestionMapper } from '../components/IngestionMapper';
+import { api } from '../services/api';
+import { Shield, Lock, Loader } from 'lucide-react';
 
 interface OnboardingWizardProps {
     onNavigate: (view: string) => void;
@@ -10,118 +10,88 @@ interface OnboardingWizardProps {
 
 export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }) => {
     const [isCheckingStatus, setIsCheckingStatus] = useState(true);
-    const [error, setError] = useState<string | null>(null);
 
-    // Safety Check: Prevent double-onboarding
     useEffect(() => {
-        const checkSystemStatus = async () => {
+        const checkStatus = async () => {
             try {
                 const status = await api.system.getStatus();
-
-                // If system is already locked, redirect to command center
                 if (status.is_locked) {
-                    console.log('System already locked, redirecting to Command Center...');
+                    console.log("System already locked, redirecting...");
                     onNavigate('command-center');
                     return;
                 }
-
                 setIsCheckingStatus(false);
             } catch (e) {
-                console.error('Failed to check system status:', e);
-                setError('Unable to connect to backend. Please start the server.');
+                console.error("System check failed", e);
                 setIsCheckingStatus(false);
             }
         };
-
-        checkSystemStatus();
+        checkStatus();
     }, [onNavigate]);
 
-    const handleIngestionComplete = async (result: any) => {
+    const handleIngestionComplete = async (payload: any) => {
         try {
-            // Step 1: Register the schema
-            console.log('Registering schema...', result);
-            await api.ontology.registerSchema('PRODUCT', result.fields || []);
-
-            // Step 2: Lock the system (Phase 1 → Phase 2)
-            console.log('Locking system...');
+            console.log("📜 Registering Schema:", payload);
+            await api.ontology.registerSchema('PRODUCT', payload.fields || []);
             await api.ontology.lockSystem();
-
-            // Step 3: Navigate to Command Center
-            console.log('Schema locked! Navigating to Command Center...');
+            console.log("✅ Constitution Locked!");
             onNavigate('command-center');
-        } catch (err: any) {
-            console.error('Onboarding failed:', err);
-            setError(err.message || 'Failed to complete onboarding');
+        } catch (error) {
+            console.error("❌ Constitutional Failure:", error);
+            alert("Failed to lock constitution. See console for details.");
         }
     };
 
     if (isCheckingStatus) {
         return (
-            <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center">
+            <div className="min-h-screen bg-slate-950 flex items-center justify-center">
                 <div className="text-center">
-                    <Loader className="w-12 h-12 text-indigo-600 animate-spin mx-auto mb-4" />
-                    <p className="text-slate-600 font-medium">Checking system status...</p>
-                </div>
-            </div>
-        );
-    }
-
-    if (error) {
-        return (
-            <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex items-center justify-center p-6">
-                <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border border-red-200">
-                    <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <ShieldCheck size={32} />
-                    </div>
-                    <h2 className="text-2xl font-bold text-slate-900 text-center mb-2">Connection Error</h2>
-                    <p className="text-slate-600 text-center mb-6">{error}</p>
-                    <button
-                        onClick={() => window.location.reload()}
-                        className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition-all"
-                    >
-                        Retry Connection
-                    </button>
+                    <Loader className="w-12 h-12 text-indigo-500 animate-spin mx-auto mb-4" />
+                    <p className="text-slate-400 font-medium">Checking system status...</p>
                 </div>
             </div>
         );
     }
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50">
-            {/* Header */}
-            <div className="bg-white/80 backdrop-blur-sm border-b border-slate-200 sticky top-0 z-10">
-                <div className="max-w-7xl mx-auto px-6 py-6">
-                    <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 bg-gradient-to-br from-indigo-600 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
-                            <Sparkles className="text-white" size={24} />
-                        </div>
-                        <div>
-                            <h1 className="text-2xl font-black text-slate-900">Auctorian Constitutional Wizard</h1>
-                            <p className="text-sm text-slate-500">Phase 1: Define Your Reality</p>
-                        </div>
-                    </div>
-                </div>
+        // FIXED LAYOUT: Allow vertical scrolling, prevent horizontal overflow
+        <div className="min-h-screen bg-slate-950 flex flex-col items-center py-12 px-6 relative overflow-x-hidden overflow-y-auto">
+
+            {/* Background Decor (Fixed to prevent scroll jank) */}
+            <div className="fixed top-0 left-0 w-full h-full pointer-events-none z-0">
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-500" />
+                <div className="absolute -top-20 -left-20 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl" />
+                <div className="absolute -bottom-20 -right-20 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl" />
             </div>
 
-            {/* Main Content */}
-            <div className="max-w-5xl mx-auto px-6 py-12">
-                <div className="bg-white rounded-3xl shadow-2xl shadow-slate-200/50 border border-slate-200 overflow-hidden">
-                    <div className="p-8 h-[calc(100vh-280px)]">
-                        <IngestionMapper
-                            title="Product Master Upload"
-                            description="Upload your Product CSV and map columns to Constitutional Anchors. This defines the 'Physics' of your enterprise."
-                            onComplete={handleIngestionComplete}
-                        />
-                    </div>
+            {/* Header */}
+            <div className="mb-8 text-center relative z-10 shrink-0">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400 text-xs font-mono mb-4">
+                    <Shield size={12} className="text-emerald-400" />
+                    <span>SECURE ENCLAVE // CONSTITUTIONAL PHASE</span>
                 </div>
+                <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">
+                    Initialize Sovereign Node
+                </h1>
+                <p className="text-slate-400 max-w-lg mx-auto">
+                    Map your reality to the Auctorian Constitution.
+                    Once locked, the schema becomes immutable laws for the AI.
+                </p>
+            </div>
 
-                {/* Info Footer */}
-                <div className="mt-8 text-center">
-                    <p className="text-slate-500 text-sm">
-                        🔒 Your data will be validated against the{' '}
-                        <span className="font-bold text-indigo-600">Auctorian Constitution</span> before being accepted.
-                    </p>
-                </div>
+            {/* The Constitutional Component */}
+            <div className="w-full max-w-5xl relative z-10 mb-12">
+                <IngestionMapper
+                    title="Product Ontology"
+                    description="Upload your Master Catalog (CSV) to define the Physics of your business."
+                    onComplete={handleIngestionComplete}
+                />
+            </div>
+
+            {/* Footer Status */}
+            <div className="mt-auto relative z-10 flex items-center gap-2 text-slate-600 text-sm font-mono shrink-0">
+                <Lock size={14} />
+                <span>SYSTEM STATUS: UNLOCKED (EDITABLE)</span>
             </div>
         </div>
     );

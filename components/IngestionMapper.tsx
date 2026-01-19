@@ -45,14 +45,43 @@ const FAMILY_ICONS = {
 export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, description, onComplete }) => {
   const [file, setFile] = useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [csvData, setCsvData] = useState<string[][]>([]); // First 3 rows for preview
   const [mappings, setMappings] = useState<Map<string, SchemaField>>(new Map());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Smart Auto-Detection
+  // Load user preferences from localStorage
+  const loadUserPreferences = (): Record<string, string> => {
+    try {
+      const prefs = localStorage.getItem('auctorian_mapping_preferences');
+      return prefs ? JSON.parse(prefs) : {};
+    } catch {
+      return {};
+    }
+  };
+
+  // Save user preferences to localStorage
+  const saveUserPreferences = (header: string, anchor: string) => {
+    try {
+      const prefs = loadUserPreferences();
+      prefs[header.toLowerCase()] = anchor;
+      localStorage.setItem('auctorian_mapping_preferences', JSON.stringify(prefs));
+    } catch (e) {
+      console.warn('Failed to save preferences', e);
+    }
+  };
+
+  // Smart Auto-Detection (Enhanced with User Preferences)
   const autoDetect = (header: string): { anchor?: string; family: ConstitutionalFamily } | null => {
     const h = header.toLowerCase();
+
+    // FIRST: Check user preferences
+    const userPrefs = loadUserPreferences();
+    if (userPrefs[h]) {
+      const anchor = ANCHOR_CATALOG.find(a => a.anchor === userPrefs[h]);
+      if (anchor) return { anchor: anchor.anchor, family: anchor.family };
+    }
 
     // ID Detection
     if (h.includes('sku') || h.includes('product_id') || h.includes('id'))
@@ -96,7 +125,9 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
-      const firstLine = text.split('\n')[0];
+      const lines = text.split('\n').filter(l => l.trim());
+      const firstLine = lines[0];
+
       let delimiter = ',';
       if (firstLine.includes('|')) delimiter = '|';
       else if (firstLine.includes(';')) delimiter = ';';
@@ -105,7 +136,13 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
       const headers = firstLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, ''));
       setCsvHeaders(headers);
 
-      // Auto-Detect
+      // Extract first 3 data rows for preview
+      const dataRows = lines.slice(1, 4).map(line =>
+        line.split(delimiter).map(cell => cell.trim().replace(/^"|"$/g, ''))
+      );
+      setCsvData(dataRows);
+
+      // Auto-Detect (with user preferences)
       const initialMappings = new Map<string, SchemaField>();
       headers.forEach((header, idx) => {
         const detection = autoDetect(header);
@@ -122,12 +159,17 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
       });
       setMappings(initialMappings);
     };
-    reader.readAsText(file.slice(0, 5000));
+    reader.readAsText(file.slice(0, 10000)); // Increased to capture more rows
   };
 
   const updateMapping = (csvHeader: string, anchorKey: string) => {
     const anchor = ANCHOR_CATALOG.find(a => a.anchor === anchorKey);
     if (!anchor && anchorKey !== 'SKIP') return;
+
+    // Save user preference when they manually change a mapping
+    if (anchorKey !== 'SKIP' && anchor) {
+      saveUserPreferences(csvHeader, anchor.anchor);
+    }
 
     const updated = new Map(mappings);
     if (anchorKey === 'SKIP') {
@@ -272,33 +314,52 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
                   </div>
 
                   <div className="space-y-3">
-                    {csvHeaders.map(header => {
+                    {csvHeaders.map((header, headerIdx) => {
                       const mapping = mappings.get(header);
                       if (mapping && mapping.family_type === family) {
+                        // Get sample data for this column
+                        const sampleData = csvData.map(row => row[headerIdx]).filter(Boolean);
+
                         return (
-                          <div key={header} className="grid grid-cols-2 gap-3 items-center">
-                            <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
-                              {header}
-                              {mapping.generic_anchor && anchors.find(a => a.anchor === mapping.generic_anchor)?.mandatory && (
-                                <span className="text-xs text-red-500">*</span>
-                              )}
-                            </label>
-                            <select
-                              className={`text-sm border rounded-lg p-2 bg-white ${mapping.generic_anchor && anchors.find(a => a.anchor === mapping.generic_anchor)?.mandatory && !mapping.generic_anchor
-                                  ? 'border-red-300 bg-red-50'
-                                  : 'border-slate-300'
-                                }`}
-                              value={mapping.generic_anchor || ''}
-                              onChange={(e) => updateMapping(header, e.target.value)}
-                            >
-                              <option value="">-- Select Anchor --</option>
-                              {anchors.map(a => (
-                                <option key={a.anchor} value={a.anchor}>
-                                  {a.label} {a.mandatory ? '*' : ''}
-                                </option>
-                              ))}
-                              <option value="SKIP">(Skip Column)</option>
-                            </select>
+                          <div key={header} className="space-y-2">
+                            <div className="grid grid-cols-2 gap-3 items-center">
+                              <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
+                                {header}
+                                {mapping.generic_anchor && anchors.find(a => a.anchor === mapping.generic_anchor)?.mandatory && (
+                                  <span className="text-xs text-red-500">*</span>
+                                )}
+                              </label>
+                              <select
+                                className={`text-sm border rounded-lg p-2 bg-white ${mapping.generic_anchor && anchors.find(a => a.anchor === mapping.generic_anchor)?.mandatory && !mapping.generic_anchor
+                                    ? 'border-red-300 bg-red-50'
+                                    : 'border-slate-300'
+                                  }`}
+                                value={mapping.generic_anchor || ''}
+                                onChange={(e) => updateMapping(header, e.target.value)}
+                              >
+                                <option value="">-- Select Anchor --</option>
+                                {anchors.map(a => (
+                                  <option key={a.anchor} value={a.anchor}>
+                                    {a.label} {a.mandatory ? '*' : ''}
+                                  </option>
+                                ))}
+                                <option value="SKIP">(Skip Column)</option>
+                              </select>
+                            </div>
+
+                            {/* Sample Data Preview */}
+                            {sampleData.length > 0 && mapping.generic_anchor && (
+                              <div className="ml-0 pl-4 border-l-2 border-slate-200">
+                                <div className="text-xs text-slate-500 font-medium mb-1">Sample Data:</div>
+                                <div className="flex flex-wrap gap-1">
+                                  {sampleData.slice(0, 3).map((val, idx) => (
+                                    <span key={idx} className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded font-mono">
+                                      {val.length > 20 ? val.substring(0, 20) + '...' : val}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         );
                       }
@@ -316,8 +377,8 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
               onClick={handleSubmit}
               disabled={!validation.valid || isSubmitting}
               className={`w-full font-bold py-4 rounded-xl transition-all flex justify-center items-center gap-2 ${validation.valid
-                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-lg'
-                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-lg'
+                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 }`}
             >
               {isSubmitting ? (

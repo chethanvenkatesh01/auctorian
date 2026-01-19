@@ -118,6 +118,33 @@ async def update_ontology_structure(payload: Dict[str, Any]):
     """
     return domain_mgr.save_structure(payload.get('entity', 'PRODUCT'), payload.get('fields', []))
 
+@app.post("/ontology/schema/register")
+async def register_schema(payload: Dict[str, Any]):
+    """
+    [CONSTITUTIONAL UI] Registers the client's schema mapping.
+    Validates against DNA mandatory anchors.
+    """
+    try:
+        entity_type = payload.get('entity_type', 'PRODUCT')
+        fields = payload.get('fields', [])
+        domain_mgr.register_schema(entity_type, fields)
+        return {"status": "success", "message": f"Schema registered for {entity_type}"}
+    except Exception as e:
+        logger.error(f"Schema registration failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/ontology/lock")
+async def lock_system():
+    """
+    [CONSTITUTIONAL UI] Locks the system (Phase 1 -> Phase 2).
+    Makes schema immutable.
+    """
+    try:
+        domain_mgr.lock_system()
+        return {"status": "success", "message": "System LOCKED. Schema is now immutable."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ==============================================================================
 # 3. ML & INTELLIGENCE ENDPOINTS

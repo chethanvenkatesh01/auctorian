@@ -5,27 +5,33 @@ import { ConstitutionalFamily, SchemaField, AnchorDefinition } from '../types';
 interface IngestionMapperProps {
   title: string;
   description: string;
+  entityType: string; // Dynamic: 'PRODUCT', 'TRANSACTION', 'INVENTORY', or custom
   onComplete: (result: any) => void;
 }
 
-// The Constitution: Available Anchors by Family
-const ANCHOR_CATALOG: AnchorDefinition[] = [
-  // INTRINSIC (What it IS)
+// Core Anchor Catalogs by Entity Type
+const PRODUCT_ANCHORS: AnchorDefinition[] = [
   { anchor: 'ANCHOR_PRODUCT_ID', label: 'Product ID', family: ConstitutionalFamily.INTRINSIC, mandatory: true, description: 'Unique identifier', unlocks: 'System Identity' },
   { anchor: 'ANCHOR_PRODUCT_NAME', label: 'Product Name', family: ConstitutionalFamily.INTRINSIC, mandatory: true, description: 'Display name' },
   { anchor: 'ANCHOR_CATEGORY', label: 'Category', family: ConstitutionalFamily.INTRINSIC, mandatory: false, description: 'Hierarchy Level 1' },
-
-  // STATE (What it HAS)
   { anchor: 'ANCHOR_RETAIL_PRICE', label: 'Retail Price', family: ConstitutionalFamily.STATE, mandatory: true, description: 'Revenue Physics', unlocks: 'Price Optimization' },
   { anchor: 'ANCHOR_STOCK_ON_HAND', label: 'Stock on Hand', family: ConstitutionalFamily.STATE, mandatory: false, description: 'Inventory snapshot', unlocks: 'Censored Demand Logic' },
   { anchor: 'ANCHOR_LAUNCH_DATE', label: 'Launch Date', family: ConstitutionalFamily.STATE, mandatory: false, description: 'Product birth', unlocks: 'NPI Forecasting' },
+];
 
-  // PERFORMANCE (What it DID)
-  { anchor: 'ANCHOR_SALES_QTY', label: 'Sales Quantity', family: ConstitutionalFamily.PERFORMANCE, mandatory: false, description: 'Transaction volume' },
+const TRANSACTION_ANCHORS: AnchorDefinition[] = [
+  { anchor: 'ANCHOR_TX_ID', label: 'Transaction ID', family: ConstitutionalFamily.INTRINSIC, mandatory: true, description: 'Unique transaction ID' },
+  { anchor: 'ANCHOR_PRODUCT_ID', label: 'Product ID', family: ConstitutionalFamily.INTRINSIC, mandatory: true, description: 'Product reference' },
+  { anchor: 'ANCHOR_DATE', label: 'Transaction Date', family: ConstitutionalFamily.STATE, mandatory: true, description: 'Timestamp' },
+  { anchor: 'ANCHOR_SALES_QTY', label: 'Sales Quantity', family: ConstitutionalFamily.PERFORMANCE, mandatory: true, description: 'Units sold', unlocks: 'Demand Forecasting' },
   { anchor: 'ANCHOR_SALES_VAL', label: 'Sales Value', family: ConstitutionalFamily.PERFORMANCE, mandatory: false, description: 'Revenue generated' },
+];
 
-  // ENVIRONMENTAL (External Forces)
-  { anchor: 'ANCHOR_COMP_PRICE', label: 'Competitor Price', family: ConstitutionalFamily.ENVIRONMENTAL, mandatory: false, description: 'Market signal', unlocks: 'Competitive Pricing' },
+const INVENTORY_ANCHORS: AnchorDefinition[] = [
+  { anchor: 'ANCHOR_PRODUCT_ID', label: 'Product ID', family: ConstitutionalFamily.INTRINSIC, mandatory: true, description: 'Product reference' },
+  { anchor: 'ANCHOR_DATE', label: 'Snapshot Date', family: ConstitutionalFamily.STATE, mandatory: true, description: 'Inventory date' },
+  { anchor: 'ANCHOR_STOCK_ON_HAND', label: 'Stock on Hand', family: ConstitutionalFamily.STATE, mandatory: true, description: 'Current inventory', unlocks: 'Stockout Prediction' },
+  { anchor: 'ANCHOR_ON_ORDER', label: 'On Order', family: ConstitutionalFamily.STATE, mandatory: false, description: 'Units in transit' },
 ];
 
 const FAMILY_COLORS = {
@@ -42,74 +48,89 @@ const FAMILY_ICONS = {
   [ConstitutionalFamily.ENVIRONMENTAL]: Cloud,
 };
 
-export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, description, onComplete }) => {
+export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, description, entityType, onComplete }) => {
   const [file, setFile] = useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
-  const [csvData, setCsvData] = useState<string[][]>([]); // First 3 rows for preview
+  const [csvData, setCsvData] = useState<string[][]>([]);
   const [mappings, setMappings] = useState<Map<string, SchemaField>>(new Map());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load user preferences from localStorage
+  // Determine anchor catalog based on entity type
+  const getAnchorCatalog = (): AnchorDefinition[] => {
+    switch (entityType.toUpperCase()) {
+      case 'PRODUCT': return PRODUCT_ANCHORS;
+      case 'TRANSACTION': return TRANSACTION_ANCHORS;
+      case 'INVENTORY': return INVENTORY_ANCHORS;
+      default: return []; // Custom entity - no predefined anchors
+    }
+  };
+
+  const anchorCatalog = getAnchorCatalog();
+  const isCustomEntity = anchorCatalog.length === 0;
+
+  // Generate custom anchor from column name
+  const generateCustomAnchor = (columnName: string): string => {
+    return `ANCHOR_${columnName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+  };
+
   const loadUserPreferences = (): Record<string, string> => {
     try {
-      const prefs = localStorage.getItem('auctorian_mapping_preferences');
+      const prefs = localStorage.getItem(`auctorian_mapping_${entityType.toLowerCase()}`);
       return prefs ? JSON.parse(prefs) : {};
     } catch {
       return {};
     }
   };
 
-  // Save user preferences to localStorage
   const saveUserPreferences = (header: string, anchor: string) => {
     try {
       const prefs = loadUserPreferences();
       prefs[header.toLowerCase()] = anchor;
-      localStorage.setItem('auctorian_mapping_preferences', JSON.stringify(prefs));
+      localStorage.setItem(`auctorian_mapping_${entityType.toLowerCase()}`, JSON.stringify(prefs));
     } catch (e) {
       console.warn('Failed to save preferences', e);
     }
   };
 
-  // Smart Auto-Detection (Enhanced with User Preferences)
   const autoDetect = (header: string): { anchor?: string; family: ConstitutionalFamily } | null => {
     const h = header.toLowerCase();
 
-    // FIRST: Check user preferences
+    // Check user preferences first
     const userPrefs = loadUserPreferences();
     if (userPrefs[h]) {
-      const anchor = ANCHOR_CATALOG.find(a => a.anchor === userPrefs[h]);
+      const anchor = anchorCatalog.find(a => a.anchor === userPrefs[h]);
       if (anchor) return { anchor: anchor.anchor, family: anchor.family };
     }
 
-    // ID Detection
-    if (h.includes('sku') || h.includes('product_id') || h.includes('id'))
-      return { anchor: 'ANCHOR_PRODUCT_ID', family: ConstitutionalFamily.INTRINSIC };
-    if (h.includes('name') || h.includes('title') || h.includes('description'))
-      return { anchor: 'ANCHOR_PRODUCT_NAME', family: ConstitutionalFamily.INTRINSIC };
-    if (h.includes('category') || h.includes('dept') || h.includes('division'))
-      return { anchor: 'ANCHOR_CATEGORY', family: ConstitutionalFamily.INTRINSIC };
+    // For custom entities, generate anchor and default to INTRINSIC
+    if (isCustomEntity) {
+      return { anchor: generateCustomAnchor(header), family: ConstitutionalFamily.INTRINSIC };
+    }
 
-    // Price Detection
-    if (h.includes('price') || h.includes('msrp') || h.includes('retail'))
-      return { anchor: 'ANCHOR_RETAIL_PRICE', family: ConstitutionalFamily.STATE };
-    if (h.includes('stock') || h.includes('inventory') || h.includes('qty_on_hand'))
-      return { anchor: 'ANCHOR_STOCK_ON_HAND', family: ConstitutionalFamily.STATE };
-    if (h.includes('launch') || h.includes('intro_date') || h.includes('release'))
-      return { anchor: 'ANCHOR_LAUNCH_DATE', family: ConstitutionalFamily.STATE };
+    // Core entity auto-detection
+    if (h.includes('sku') || h.includes('product_id') || h.includes('id')) {
+      const match = anchorCatalog.find(a => a.anchor.includes('PRODUCT_ID') || a.anchor.includes('_ID'));
+      return match ? { anchor: match.anchor, family: match.family } : null;
+    }
+    if (h.includes('name') || h.includes('title')) {
+      const match = anchorCatalog.find(a => a.anchor.includes('NAME'));
+      return match ? { anchor: match.anchor, family: match.family } : null;
+    }
+    if (h.includes('price') || h.includes('msrp') || h.includes('retail')) {
+      const match = anchorCatalog.find(a => a.anchor.includes('PRICE'));
+      return match ? { anchor: match.anchor, family: match.family } : null;
+    }
+    if (h.includes('qty') || h.includes('quantity') || h.includes('units')) {
+      const match = anchorCatalog.find(a => a.anchor.includes('QTY') || a.anchor.includes('STOCK'));
+      return match ? { anchor: match.anchor, family: match.family } : null;
+    }
+    if (h.includes('date') || h.includes('time')) {
+      const match = anchorCatalog.find(a => a.anchor.includes('DATE'));
+      return match ? { anchor: match.anchor, family: match.family } : null;
+    }
 
-    // Performance
-    if (h.includes('sales') || h.includes('sold') || h.includes('units'))
-      return { anchor: 'ANCHOR_SALES_QTY', family: ConstitutionalFamily.PERFORMANCE };
-    if (h.includes('revenue') || h.includes('sales_amt'))
-      return { anchor: 'ANCHOR_SALES_VAL', family: ConstitutionalFamily.PERFORMANCE };
-
-    // Environmental
-    if (h.includes('comp') || h.includes('competitor'))
-      return { anchor: 'ANCHOR_COMP_PRICE', family: ConstitutionalFamily.ENVIRONMENTAL };
-
-    // Default: Unmapped Attribute
     return { family: ConstitutionalFamily.INTRINSIC };
   };
 
@@ -136,15 +157,13 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
       const headers = firstLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, ''));
       setCsvHeaders(headers);
 
-      // Extract first 3 data rows for preview
       const dataRows = lines.slice(1, 4).map(line =>
         line.split(delimiter).map(cell => cell.trim().replace(/^"|"$/g, ''))
       );
       setCsvData(dataRows);
 
-      // Auto-Detect (with user preferences)
       const initialMappings = new Map<string, SchemaField>();
-      headers.forEach((header, idx) => {
+      headers.forEach((header) => {
         const detection = autoDetect(header);
         if (detection) {
           initialMappings.set(header, {
@@ -159,42 +178,47 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
       });
       setMappings(initialMappings);
     };
-    reader.readAsText(file.slice(0, 10000)); // Increased to capture more rows
+    reader.readAsText(file.slice(0, 10000));
   };
 
-  const updateMapping = (csvHeader: string, anchorKey: string) => {
-    const anchor = ANCHOR_CATALOG.find(a => a.anchor === anchorKey);
-    if (!anchor && anchorKey !== 'SKIP') return;
-
-    // Save user preference when they manually change a mapping
-    if (anchorKey !== 'SKIP' && anchor) {
-      saveUserPreferences(csvHeader, anchor.anchor);
-    }
-
+  const updateMapping = (csvHeader: string, anchorKey: string, familyType?: ConstitutionalFamily) => {
     const updated = new Map(mappings);
+
     if (anchorKey === 'SKIP') {
       updated.delete(csvHeader);
     } else {
+      const anchor = anchorCatalog.find(a => a.anchor === anchorKey);
+      // For custom entities or if anchor not found, use the provided values
       updated.set(csvHeader, {
         name: csvHeader,
-        generic_anchor: anchor!.anchor,
-        family_type: anchor!.family,
+        generic_anchor: anchorKey,
+        family_type: familyType || anchor?.family || ConstitutionalFamily.INTRINSIC,
         is_attribute: true
       });
+
+      if (anchor || isCustomEntity) {
+        saveUserPreferences(csvHeader, anchorKey);
+      }
     }
     setMappings(updated);
   };
 
   const validateSchema = (): { valid: boolean; missing: string[] } => {
-    const mandatory = ANCHOR_CATALOG.filter(a => a.mandatory).map(a => a.anchor);
+    const mandatory = anchorCatalog.filter(a => a.mandatory).map(a => a.anchor);
     const mapped = Array.from(mappings.values()).map(m => m.generic_anchor).filter(Boolean);
     const missing = mandatory.filter(m => !mapped.includes(m));
+
+    // Custom entities don't have mandatory fields
+    if (isCustomEntity && mappings.size > 0) {
+      return { valid: true, missing: [] };
+    }
+
     return { valid: missing.length === 0, missing };
   };
 
   const getUnlockedCapabilities = (): string[] => {
     const mapped = Array.from(mappings.values()).map(m => m.generic_anchor).filter(Boolean);
-    return ANCHOR_CATALOG.filter(a => a.unlocks && mapped.includes(a.anchor)).map(a => a.unlocks!);
+    return anchorCatalog.filter(a => a.unlocks && mapped.includes(a.anchor)).map(a => a.unlocks!);
   };
 
   const handleSubmit = async () => {
@@ -211,9 +235,7 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
 
     try {
       const fields = Array.from(mappings.values());
-      const { api } = await import('../services/api');
-      await api.ontology.registerSchema('PRODUCT', fields);
-      onComplete({ status: 'success', fields });
+      onComplete({ entityType, fields });
     } catch (err: any) {
       setError(err.message || "Schema Registration Failed");
     } finally {
@@ -230,7 +252,9 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
 
   const validation = validateSchema();
   const unlockedCapabilities = getUnlockedCapabilities();
-  const completeness = Math.round((Array.from(mappings.values()).filter(m => m.generic_anchor).length / ANCHOR_CATALOG.filter(a => a.mandatory).length) * 100);
+  const completeness = isCustomEntity
+    ? (mappings.size > 0 ? 100 : 0)
+    : Math.round((Array.from(mappings.values()).filter(m => m.generic_anchor).length / anchorCatalog.filter(a => a.mandatory).length) * 100);
 
   return (
     <div className="h-full flex flex-col">
@@ -239,6 +263,11 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
           <Sparkles className="text-indigo-500" /> {title}
         </h4>
         <p className="text-sm text-slate-500">{description}</p>
+        {isCustomEntity && (
+          <div className="mt-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+            <strong>Custom Entity Mode:</strong> No predefined anchors. Anchors will be auto-generated from your column names.
+          </div>
+        )}
       </div>
 
       {error && (
@@ -255,15 +284,15 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
           <div className="w-20 h-20 bg-gradient-to-br from-indigo-500 to-purple-600 text-white rounded-2xl flex items-center justify-center mb-4 shadow-lg">
             <Upload size={40} />
           </div>
-          <p className="font-bold text-slate-700 text-lg">Upload Product Master</p>
+          <p className="font-bold text-slate-700 text-lg">Upload {entityType} Data</p>
           <p className="text-xs text-slate-400 mt-1">CSV only • Constitutional Mapping Required</p>
           <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileChange} />
         </div>
       )}
 
       {file && (
-        <div className="flex-1 flex flex-col">
-          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg mb-6 border border-indigo-100">
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg mb-6 border border-indigo-100 shrink-0">
             <div className="flex items-center gap-3">
               <FileText className="text-indigo-600" size={20} />
               <div>
@@ -274,8 +303,7 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
             <button onClick={reset} className="text-slate-400 hover:text-red-500"><X size={18} /></button>
           </div>
 
-          {/* Progress Bar */}
-          <div className="mb-6 p-4 bg-white rounded-lg border border-slate-200">
+          <div className="mb-6 p-4 bg-white rounded-lg border border-slate-200 shrink-0">
             <div className="flex justify-between items-center mb-2">
               <span className="text-xs font-bold text-slate-600">Constitution Completeness</span>
               <span className="text-xs font-bold text-indigo-600">{completeness}%</span>
@@ -287,7 +315,6 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
               />
             </div>
 
-            {/* Unlocked Badges */}
             {unlockedCapabilities.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {unlockedCapabilities.map(cap => (
@@ -297,12 +324,21 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
                 ))}
               </div>
             )}
+
+            {isCustomEntity && mappings.size > 0 && (
+              <div className="mt-3">
+                <span className="px-2 py-1 bg-amber-50 text-amber-700 text-xs font-bold rounded-full border border-amber-200">
+                  Auxiliary Context Added ({mappings.size} fields)
+                </span>
+              </div>
+            )}
           </div>
 
-          {/* Mapping Grid by Family */}
-          <div className="flex-1 overflow-auto pr-2 space-y-6">
+          <div className="flex-1 overflow-y-auto pr-2 space-y-6">
             {Object.values(ConstitutionalFamily).map(family => {
-              const anchors = ANCHOR_CATALOG.filter(a => a.family === family);
+              const familyMappings = Array.from(mappings.entries()).filter(([_, m]) => m.family_type === family);
+              if (familyMappings.length === 0) return null;
+
               const FamilyIcon = FAMILY_ICONS[family];
               const colors = FAMILY_COLORS[family];
 
@@ -314,56 +350,49 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
                   </div>
 
                   <div className="space-y-3">
-                    {csvHeaders.map((header, headerIdx) => {
-                      const mapping = mappings.get(header);
-                      if (mapping && mapping.family_type === family) {
-                        // Get sample data for this column
-                        const sampleData = csvData.map(row => row[headerIdx]).filter(Boolean);
+                    {familyMappings.map(([header, mapping], idx) => {
+                      const headerIdx = csvHeaders.indexOf(header);
+                      const sampleData = csvData.map(row => row[headerIdx]).filter(Boolean);
 
-                        return (
-                          <div key={header} className="space-y-2">
-                            <div className="grid grid-cols-2 gap-3 items-center">
-                              <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
-                                {header}
-                                {mapping.generic_anchor && anchors.find(a => a.anchor === mapping.generic_anchor)?.mandatory && (
-                                  <span className="text-xs text-red-500">*</span>
-                                )}
-                              </label>
+                      return (
+                        <div key={header} className="space-y-2">
+                          <div className="grid grid-cols-2 gap-3 items-center">
+                            <label className="text-sm font-medium text-slate-700">{header}</label>
+                            {isCustomEntity ? (
+                              <div className="text-sm bg-white border border-slate-300 rounded-lg p-2 font-mono text-slate-600">
+                                {mapping.generic_anchor}
+                              </div>
+                            ) : (
                               <select
-                                className={`text-sm border rounded-lg p-2 bg-white ${mapping.generic_anchor && anchors.find(a => a.anchor === mapping.generic_anchor)?.mandatory && !mapping.generic_anchor
-                                    ? 'border-red-300 bg-red-50'
-                                    : 'border-slate-300'
-                                  }`}
+                                className="text-sm border rounded-lg p-2 bg-white border-slate-300"
                                 value={mapping.generic_anchor || ''}
                                 onChange={(e) => updateMapping(header, e.target.value)}
                               >
                                 <option value="">-- Select Anchor --</option>
-                                {anchors.map(a => (
+                                {anchorCatalog.filter(a => a.family === family).map(a => (
                                   <option key={a.anchor} value={a.anchor}>
                                     {a.label} {a.mandatory ? '*' : ''}
                                   </option>
                                 ))}
                                 <option value="SKIP">(Skip Column)</option>
                               </select>
-                            </div>
-
-                            {/* Sample Data Preview */}
-                            {sampleData.length > 0 && mapping.generic_anchor && (
-                              <div className="ml-0 pl-4 border-l-2 border-slate-200">
-                                <div className="text-xs text-slate-500 font-medium mb-1">Sample Data:</div>
-                                <div className="flex flex-wrap gap-1">
-                                  {sampleData.slice(0, 3).map((val, idx) => (
-                                    <span key={idx} className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded font-mono">
-                                      {val.length > 20 ? val.substring(0, 20) + '...' : val}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
                             )}
                           </div>
-                        );
-                      }
-                      return null;
+
+                          {sampleData.length > 0 && (
+                            <div className="ml-0 pl-4 border-l-2 border-slate-200">
+                              <div className="text-xs text-slate-500 font-medium mb-1">Sample Data:</div>
+                              <div className="flex flex-wrap gap-1">
+                                {sampleData.slice(0, 3).map((val, idx) => (
+                                  <span key={idx} className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded font-mono">
+                                    {val.length > 20 ? val.substring(0, 20) + '...' : val}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
                     })}
                   </div>
                 </div>
@@ -371,22 +400,21 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
             })}
           </div>
 
-          {/* Submit Button */}
-          <div className="pt-6 mt-4 border-t border-slate-200">
+          <div className="pt-6 mt-4 border-t border-slate-200 shrink-0">
             <button
               onClick={handleSubmit}
               disabled={!validation.valid || isSubmitting}
               className={`w-full font-bold py-4 rounded-xl transition-all flex justify-center items-center gap-2 ${validation.valid
-                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-lg'
-                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-lg'
+                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 }`}
             >
               {isSubmitting ? (
-                <span>Locking Constitution...</span>
+                <span>Registering Schema...</span>
               ) : validation.valid ? (
                 <>
                   <Lock size={18} />
-                  <span>Lock Schema & Proceed</span>
+                  <span>Register {entityType} Schema</span>
                   <ArrowRight size={18} />
                 </>
               ) : (

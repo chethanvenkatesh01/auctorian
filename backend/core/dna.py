@@ -31,7 +31,7 @@ class Anchors:
 # The Constitution
 RETAIL_STANDARDS: Dict[str, Dict] = {
     "PRODUCT": {
-        "families": [ConstitutionalFamily.INTRINSIC],
+        "families": [ConstitutionalFamily.INTRINSIC, ConstitutionalFamily.STATE],
         "mandatory_mappings": [
             Anchors.PRODUCT_ID,
             Anchors.PRODUCT_NAME
@@ -70,3 +70,4 @@ RETAIL_STANDARDS: Dict[str, Dict] = {
         ]
     }
 }
+

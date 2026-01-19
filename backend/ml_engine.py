@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 # --- CORE IMPORTS ---
 from core.feature_store import feature_store
 from core.domain_model import domain_mgr
-from core.dna import Anchors
+from core.dna import Anchors, ANCHOR_AGGREGATION_RULES
 from core.local_llm import sovereign_brain
 
 # --- LOGGING ---
@@ -205,6 +205,7 @@ class MLEngine:
     def _calculate_hierarchical_accuracy(self, df: pd.DataFrame, levels: List[str]) -> List[Dict]:
         """
         Dynamically aggregates forecasts based on User-Defined Hierarchy.
+        Uses ANCHOR_AGGREGATION_RULES to prevent invalid price summation.
         """
         # Generate Predictions
         features = [Anchors.RETAIL_PRICE, 'LAG_1', 'MA_7'] # Must match training
@@ -230,21 +231,18 @@ class MLEngine:
                 "bias": round(bias, 3)
             }
 
-        # 1. Global
+        # 1. Global (Sum quantities only)
         matrix.append(calc_row("Global", "All", df[Anchors.SALES_QTY].sum(), df['predicted_qty'].sum()))
 
-        # 2. Dynamic Levels
-        # NOTE: feature_store maps Client->Anchor. 
-        # But `levels` are Source Column Names (Client-side).
-        # We need to find the equivalent column in the DF.
-        # Typically the FeatureStore preserves unmapped attributes?
-        # In current implementations, 'build_master_table' keeps 'df_prod' columns which include everything from 'universal_objects'.
-        # 'universal_objects' has 'attributes' flattened.
-        # So 'levels' (e.g. 'Category') should exist in DF if they were in the input data.
-        
+        # 2. Dynamic Levels (Smart Aggregation)
+        # Smart Aggregation: Use dna.py rules to aggregate correctly
+        # Quantities = sum(), Prices = mean()
         for level_col in levels:
             if level_col in df.columns:
-                grouped = df.groupby(level_col)[[Anchors.SALES_QTY, 'predicted_qty']].sum().reset_index()
+                # Aggregate with proper methods
+                agg_dict = {Anchors.SALES_QTY: 'sum', 'predicted_qty': 'sum'}
+                grouped = df.groupby(level_col).agg(agg_dict).reset_index()
+                
                 for _, row in grouped.iterrows():
                     matrix.append(calc_row(level_col, row[level_col], row[Anchors.SALES_QTY], row['predicted_qty']))
 

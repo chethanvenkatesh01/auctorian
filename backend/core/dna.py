@@ -34,7 +34,8 @@ RETAIL_STANDARDS: Dict[str, Dict] = {
         "families": [ConstitutionalFamily.INTRINSIC, ConstitutionalFamily.STATE],
         "mandatory_mappings": [
             Anchors.PRODUCT_ID,
-            Anchors.PRODUCT_NAME
+            Anchors.PRODUCT_NAME,
+            Anchors.RETAIL_PRICE # Revenue Physics (Allowed via STATE family)
         ]
     },
     "INVENTORY": {
@@ -70,4 +71,3 @@ RETAIL_STANDARDS: Dict[str, Dict] = {
         ]
     }
 }
-

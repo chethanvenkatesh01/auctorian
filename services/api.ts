@@ -89,7 +89,22 @@ export const api = {
   },
 
   // =========================================================
-  // 2. ORCHESTRATION (THE PROFIT KERNEL)
+  // 2. SYSTEM STATUS & HEALTH
+  // =========================================================
+
+  system: {
+    getStatus: async () => {
+      try {
+        const res = await client.get('/health');
+        return res.data;
+      } catch (e) {
+        return { is_locked: false, status: 'offline' };
+      }
+    }
+  },
+
+  // =========================================================
+  // 3. ORCHESTRATION (THE PROFIT KERNEL)
   // =========================================================
 
   orchestration: {

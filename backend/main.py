@@ -94,6 +94,25 @@ async def boot_sequence():
 
 
 # ==============================================================================
+# 1. HEALTH & SYSTEM STATUS
+# ==============================================================================
+
+@app.get("/health")
+async def health_check():
+    """
+    [CONSTITUTIONAL UI] Returns system status including lock state.
+    """
+    try:
+        is_locked = domain_mgr.is_system_locked()
+        return {
+            "status": "online",
+            "is_locked": is_locked,
+            "version": "6.2.0-Constitutional"
+        }
+    except Exception as e:
+        return {"status": "degraded", "is_locked": False, "error": str(e)}
+
+# ==============================================================================
 # 2. ONTOLOGY & DATA CONTRACTS
 # ==============================================================================
 

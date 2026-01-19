@@ -75,15 +75,20 @@ class FeatureStore:
         # "Performance features must be Lagged."
         full_df.sort_values(by=[Anchors.PRODUCT_ID, Anchors.TX_DATE], inplace=True)
         
-        # Lag 1: Last Week's Sales
+        # Lag 1: Last Week's Sales (PERFORMANCE family)
         full_df['LAG_1'] = full_df.groupby(Anchors.PRODUCT_ID)[Anchors.SALES_QTY].shift(1)
         
         # MA 7: Moving Average (if daily data)
         full_df['MA_7'] = full_df.groupby(Anchors.PRODUCT_ID)[Anchors.SALES_QTY].transform(lambda x: x.shift(1).rolling(window=7).mean())
         
-        # 7. Enrich with Price (State)
-        # Ideally this comes from a temporal join on Pricing Events, 
-        # but for V1 we take it from Product Master (State Family) if available
+        # 7. Handle STATE Variables (Price, Stock)
+        # CRITICAL: Stock on Hand is "Opening Stock" (Current State) - DO NOT SHIFT
+        # Only shift if we detect it's "Closing Stock" via metadata (future enhancement)
+        if Anchors.STOCK_ON_HAND in full_df.columns:
+            # Opening Stock = Current State, no lag needed
+            full_df[Anchors.STOCK_ON_HAND] = full_df[Anchors.STOCK_ON_HAND].fillna(0)
+        
+        # Price: Also Current State, no lag
         if Anchors.RETAIL_PRICE in full_df.columns:
             full_df[Anchors.RETAIL_PRICE] = full_df[Anchors.RETAIL_PRICE].fillna(0)
         else:

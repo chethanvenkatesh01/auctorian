@@ -3,6 +3,7 @@ import logging
 from typing import List, Dict, Optional, Any
 # IMPORTS FROM THE SHARED SCHEMA MODULE
 from .sql_schema import init_db, get_db_connection, get_placeholder, POSTGRES_AVAILABLE
+from .dna import RETAIL_STANDARDS, ConstitutionalFamily
 
 logger = logging.getLogger("DOMAIN_MANAGER")
 
@@ -44,6 +45,146 @@ class DomainManager:
                 conn.commit()
         except Exception as e:
             logger.warning(f"Index creation skipped: {e}")
+        finally:
+            conn.close()
+
+    # =========================================================
+    # 0. SOVEREIGN GOVERNANCE (The Laws)
+    # =========================================================
+
+    def is_system_locked(self) -> bool:
+        """Checks if the system has entered Phase 2 (Operational)."""
+        conn = get_db_connection(self.db_path)
+        try:
+            ph = get_placeholder()
+            res = conn.execute(f"SELECT config_value FROM system_config WHERE config_key = 'SYSTEM_LOCKED'").fetchone()
+            return res[0] == 'TRUE' if res else False
+        except:
+            return False
+        finally:
+            conn.close()
+
+    def lock_system(self):
+        """Irreversibly transitions the system to Operational Phase."""
+        conn = get_db_connection(self.db_path)
+        try:
+            ph = get_placeholder()
+            query = f"INSERT OR REPLACE INTO system_config (config_key, config_value, description) VALUES ({ph}, {ph}, {ph})"
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO system_config (config_key, config_value, description) VALUES (%s, %s, %s) ON CONFLICT (config_key) DO UPDATE SET config_value = EXCLUDED.config_value", 
+                                ('SYSTEM_LOCKED', 'TRUE', 'Schema is now immutable.'))
+                conn.commit()
+            else:
+                conn.execute(query, ('SYSTEM_LOCKED', 'TRUE', 'Schema is now immutable.'))
+                conn.commit()
+            logger.info("🔐 [SOVEREIGN] SYSTEM LOCKED. Schema changes now forbidden.")
+        except Exception as e:
+            logger.error(f"Failed to lock system: {e}")
+        finally:
+            conn.close()
+
+    def register_schema(self, entity_type: str, rows: List[Dict]):
+        """
+        Phase 1 Action: Ingests the Ontology.
+        ENFORCES: Article IV (Abstention) - Checks for mandatory Anchors.
+        """
+        if self.is_system_locked():
+            raise PermissionError("❌ SYSTEM LOCKED. Schema changes forbidden in Operational Phase.")
+
+        # 1. Validation (Article IV)
+        standards = RETAIL_STANDARDS.get(entity_type)
+        if not standards:
+            logger.warning(f"⚠️ Registering unknown entity type {entity_type} without Constitutional checks.")
+        else:
+            required = set(standards['mandatory_mappings'])
+            # Extract anchors provided in the rows
+            provided_anchors = set()
+            for r in rows:
+                if r.get('generic_anchor'):
+                    provided_anchors.add(r['generic_anchor'])
+            
+            missing = required - provided_anchors
+            if missing:
+                error_msg = f"❌ [CONSTITUTIONAL VIOLATION] Missing Anchors for {entity_type}: {missing}. System ABSTAINS."
+                logger.critical(error_msg)
+                raise ValueError(error_msg)
+
+        # 2. Storage
+        conn = get_db_connection(self.db_path)
+        try:
+            ph = get_placeholder()
+            # Clean old definitions for this entity (during Phase 1 only)
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                 with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM schema_registry WHERE entity_type = {ph}", (entity_type,))
+                    
+                    insert_query = f"""
+                        INSERT INTO schema_registry 
+                        (entity_type, source_column_name, generic_anchor, family_type, is_pk, is_attribute, is_hierarchy, hierarchy_level, formula)
+                        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                    """
+                    data = [(
+                        entity_type, r['name'], r.get('generic_anchor'), r.get('family_type', 'INTRINSIC'),
+                        r.get('is_pk', False), r.get('is_attribute', True), r.get('is_hierarchy', False),
+                        r.get('hierarchy_level'), r.get('formula')
+                    ) for r in rows]
+                    
+                    from psycopg2.extras import execute_batch
+                    execute_batch(cur, insert_query, data)
+                 conn.commit()
+            else:
+                 conn.execute(f"DELETE FROM schema_registry WHERE entity_type = {ph}", (entity_type,))
+                 insert_query = f"""
+                        INSERT INTO schema_registry 
+                        (entity_type, source_column_name, generic_anchor, family_type, is_pk, is_attribute, is_hierarchy, hierarchy_level, formula)
+                        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+                    """
+                 data = [(
+                        entity_type, r['name'], r.get('generic_anchor'), r.get('family_type', 'INTRINSIC'),
+                        r.get('is_pk', False), r.get('is_attribute', True), r.get('is_hierarchy', False),
+                        r.get('hierarchy_level'), r.get('formula')
+                    ) for r in rows]
+                 conn.executemany(insert_query, data)
+                 conn.commit()
+
+            logger.info(f"📜 [ONTOLOGY] Registered {len(rows)} fields for {entity_type}.")
+
+        except Exception as e:
+            logger.error(f"Failed to register schema: {e}")
+            raise e
+        finally:
+            conn.close()
+
+    def get_anchor_map(self, entity_type: str) -> Dict[str, str]:
+        """Returns MAPPING: ANCHOR_NAME -> CLIENT_COLUMN_NAME"""
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder()
+        try:
+            query = f"SELECT generic_anchor, source_column_name FROM schema_registry WHERE entity_type={ph} AND generic_anchor IS NOT NULL"
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                 with conn.cursor() as cur:
+                    cur.execute(query, (entity_type,))
+                    return {row[0]: row[1] for row in cur.fetchall()}
+            else:
+                rows = conn.execute(query, (entity_type,)).fetchall()
+                return {row[0]: row[1] for row in rows}
+        finally:
+            conn.close()
+
+    def get_hierarchy_definition(self, entity_type: str) -> List[str]:
+        """Returns the ordered hierarchy levels (Schema Aware)."""
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder()
+        try:
+            query = f"SELECT source_column_name FROM schema_registry WHERE entity_type={ph} AND is_hierarchy=1 ORDER BY hierarchy_level ASC"
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                 with conn.cursor() as cur:
+                    cur.execute(query, (entity_type,))
+                    return [row[0] for row in cur.fetchall()]
+            else:
+                rows = conn.execute(query, (entity_type,)).fetchall()
+                return [row[0] for row in rows]
         finally:
             conn.close()
 

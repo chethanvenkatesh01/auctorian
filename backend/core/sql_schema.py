@@ -105,14 +105,14 @@ COMMON_INIT = [
     # Metadata: The Schema Registry (Article II & IV Enforcement)
     """
     CREATE TABLE IF NOT EXISTS schema_registry (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, -- SQLite auto-inc, Postgres maps to SERIAL
+        id SERIAL PRIMARY KEY,
         entity_type TEXT NOT NULL, 
         source_column_name TEXT NOT NULL, 
         generic_anchor TEXT, -- Maps to Anchors in dna.py
         family_type TEXT NOT NULL, -- INTRINSIC, STATE, etc.
-        is_pk BOOLEAN DEFAULT 0,
-        is_attribute BOOLEAN DEFAULT 1,
-        is_hierarchy BOOLEAN DEFAULT 0,
+        is_pk BOOLEAN DEFAULT FALSE,
+        is_attribute BOOLEAN DEFAULT TRUE,
+        is_hierarchy BOOLEAN DEFAULT FALSE,
         hierarchy_level INTEGER,
         formula TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

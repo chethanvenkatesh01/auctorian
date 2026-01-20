@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileText, ArrowRight, AlertCircle, X, Lock, Zap, Package, TrendingUp, Cloud, Sparkles } from 'lucide-react';
+import { Upload, FileText, ArrowRight, AlertCircle, X, Lock, Zap, Package, TrendingUp, Cloud, Sparkles, Plus, Calculator } from 'lucide-react';
 import { ConstitutionalFamily, SchemaField, AnchorDefinition } from '../types';
+import { FormulaBuilderModal } from './FormulaBuilderModal';
 
 interface IngestionMapperProps {
   title: string;
@@ -53,8 +54,11 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvData, setCsvData] = useState<string[][]>([]);
   const [mappings, setMappings] = useState<Map<string, SchemaField>>(new Map());
+  const [derivedFields, setDerivedFields] = useState<Map<string, SchemaField>>(new Map()); // Formula-based fields
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isFormulaModalOpen, setIsFormulaModalOpen] = useState(false);
+  const [currentFormulaField, setCurrentFormulaField] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Determine anchor catalog based on entity type
@@ -221,6 +225,32 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
     return anchorCatalog.filter(a => a.unlocks && mapped.includes(a.anchor)).map(a => a.unlocks!);
   };
 
+  const handleOpenFormulaBuilder = () => {
+    const fieldName = `CALCULATED_FIELD_${derivedFields.size + 1}`;
+    setCurrentFormulaField(fieldName);
+    setIsFormulaModalOpen(true);
+  };
+
+  const handleFormulaSave = (formula: string) => {
+    const derivedField: SchemaField = {
+      name: currentFormulaField,
+      generic_anchor: `ANCHOR_${currentFormulaField}`,
+      family_type: ConstitutionalFamily.PERFORMANCE, // Default to performance for calculations
+      is_attribute: true,
+      formula: formula
+    };
+
+    const updated = new Map(derivedFields);
+    updated.set(currentFormulaField, derivedField);
+    setDerivedFields(updated);
+  };
+
+  const handleRemoveDerivedField = (fieldName: string) => {
+    const updated = new Map(derivedFields);
+    updated.delete(fieldName);
+    setDerivedFields(updated);
+  };
+
   const handleSubmit = async () => {
     if (!file) return;
     setIsSubmitting(true);
@@ -234,8 +264,9 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
     }
 
     try {
-      const fields = Array.from(mappings.values());
-      onComplete({ entityType, fields });
+      // Combine base mappings and derived fields
+      const allFields = [...Array.from(mappings.values()), ...Array.from(derivedFields.values())];
+      onComplete({ entityType, fields: allFields });
     } catch (err: any) {
       setError(err.message || "Schema Registration Failed");
     } finally {
@@ -405,8 +436,8 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
               onClick={handleSubmit}
               disabled={!validation.valid || isSubmitting}
               className={`w-full font-bold py-4 rounded-xl transition-all flex justify-center items-center gap-2 ${validation.valid
-                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-lg'
-                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-lg'
+                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                 }`}
             >
               {isSubmitting ? (

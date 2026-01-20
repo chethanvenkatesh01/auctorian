@@ -197,21 +197,29 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
       );
       setCsvData(dataRows);
 
-      const initialMappings = new Map<string, SchemaField>();
+      // SMART MERGE: Preserve existing mappings if column name matches
+      const mergedMappings = new Map<string, SchemaField>();
+
       headers.forEach((header) => {
-        const detection = autoDetect(header);
-        if (detection) {
-          initialMappings.set(header, {
-            name: header,
-            generic_anchor: detection.anchor,
-            family_type: detection.family,
-            is_attribute: true,
-            is_hierarchy: header.toLowerCase().includes('category') || header.toLowerCase().includes('dept'),
-            hierarchy_level: header.toLowerCase().includes('category') ? 1 : undefined
-          });
+        // If we already have a mapping for this header (from initialSchema or previous work), keep it.
+        if (mappings.has(header)) {
+          mergedMappings.set(header, mappings.get(header)!);
+        } else {
+          // New column -> Auto-detect
+          const detection = autoDetect(header);
+          if (detection) {
+            mergedMappings.set(header, {
+              name: header,
+              generic_anchor: detection.anchor,
+              family_type: detection.family,
+              is_attribute: true,
+              is_hierarchy: header.toLowerCase().includes('category') || header.toLowerCase().includes('dept'),
+              hierarchy_level: header.toLowerCase().includes('category') ? 1 : undefined
+            });
+          }
         }
       });
-      setMappings(initialMappings);
+      setMappings(mergedMappings);
     };
     reader.readAsText(file.slice(0, 10000));
   };
@@ -318,6 +326,9 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
     ? (mappings.size > 0 ? 100 : 0)
     : Math.round((Array.from(mappings.values()).filter(m => m.generic_anchor).length / anchorCatalog.filter(a => a.mandatory).length) * 100);
 
+  // CONTEXT-AWARE STATE: Do we have a file OR an existing schema?
+  const hasActiveContext = !!file || (csvHeaders.length > 0 && !!initialSchema);
+
   return (
     <div className="h-full flex flex-col">
       <div className="mb-6">
@@ -338,7 +349,8 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
         </div>
       )}
 
-      {!file && (
+      {/* 1. UPLOAD STATE: Only show if no context exists */}
+      {!hasActiveContext && (
         <div
           onClick={() => fileInputRef.current?.click()}
           className="flex-1 border-2 border-dashed border-slate-300 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 transition-colors p-8"
@@ -352,19 +364,48 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
         </div>
       )}
 
-      {file && (
+      {/* 2. EDITOR STATE: Show if context exists (File OR Schema) */}
+      {hasActiveContext && (
         <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex justify-between items-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg mb-6 border border-indigo-100 shrink-0">
+          {/* CONTROL BAR */}
+          <div className="flex justify-between items-center p-4 bg-slate-50 border border-slate-200 rounded-lg mb-4 shrink-0">
             <div className="flex items-center gap-3">
               <FileText className="text-indigo-600" size={20} />
               <div>
-                <div className="text-sm font-bold text-slate-800">{file.name}</div>
-                <div className="text-xs text-slate-500">{csvHeaders.length} columns detected</div>
+                <div className="text-sm font-bold text-slate-800">
+                  {file ? file.name : `Existing Schema: ${entityType}`}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {csvHeaders.length} columns • {file ? 'New Upload' : 'Database Version'}
+                </div>
               </div>
             </div>
-            <button onClick={reset} className="text-slate-400 hover:text-red-500"><X size={18} /></button>
+
+            <div className="flex gap-2">
+              <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileChange} />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="px-3 py-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md border border-indigo-200 transition-colors"
+              >
+                {file ? 'Change File' : 'Replace Source File'}
+              </button>
+              <button onClick={reset} className="text-slate-400 hover:text-red-500 p-1">
+                <X size={18} />
+              </button>
+            </div>
           </div>
 
+          {/* PROMINENT FORMULA BUTTON */}
+          <button
+            onClick={handleOpenFormulaBuilder}
+            className="mb-6 w-full py-3 bg-gradient-to-r from-violet-600/10 to-fuchsia-600/10 hover:from-violet-600/20 hover:to-fuchsia-600/20 border border-violet-200 text-violet-700 font-bold rounded-xl flex items-center justify-center gap-2 transition-all group shrink-0"
+          >
+            <Sparkles size={16} className="group-hover:animate-pulse" />
+            <span>✨ Create Synthetic Feature (Formula)</span>
+            <Plus size={16} className="opacity-50" />
+          </button>
+
+          {/* STATUS CARD */}
           <div className="mb-6 p-4 bg-white rounded-lg border border-slate-200 shrink-0">
             <div className="flex justify-between items-center mb-2">
               <span className="text-xs font-bold text-slate-600">Constitution Completeness</span>

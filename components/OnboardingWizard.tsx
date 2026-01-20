@@ -61,9 +61,12 @@ const CARTRIDGE_OPTIONS: CartridgeOption[] = [
     }
 ];
 
+// View Mode State for Navigation
+type ViewMode = 'HIERARCHY' | 'CARTRIDGES' | 'MAPPER';
+
 export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }) => {
     const [isCheckingStatus, setIsCheckingStatus] = useState(true);
-    const [currentStep, setCurrentStep] = useState(0); // 0 = staging, 1 = selector, 2 = mapper
+    const [viewMode, setViewMode] = useState<ViewMode>('CARTRIDGES');
     const [selectedCartridge, setSelectedCartridge] = useState<CartridgeOption | null>(null);
     const [customEntityName, setCustomEntityName] = useState('');
     const [showCustomInput, setShowCustomInput] = useState(false);
@@ -120,17 +123,25 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
         } else {
             setSelectedCartridge(cartridge);
             setEditingEntity(null); // New entity
-            setCurrentStep(2);
+            setViewMode('MAPPER');
         }
     };
 
     const handleEditEntity = (entity: StagedEntity) => {
         const matchingCartridge = CARTRIDGE_OPTIONS.find(c => c.entityType === entity.entityType);
-        if (matchingCartridge) {
-            setSelectedCartridge(matchingCartridge);
-            setEditingEntity(entity.entityType);
-            setCurrentStep(2);
-        }
+        // Should also support custom entities reconstruction
+        const cartridgeToUse = matchingCartridge || {
+            id: 'custom',
+            name: entity.name,
+            description: 'Existing Custom Entity',
+            icon: Database,
+            entityType: entity.entityType,
+            color: entity.color
+        };
+
+        setSelectedCartridge(cartridgeToUse);
+        setEditingEntity(entity.entityType);
+        setViewMode('MAPPER');
     };
 
     const handleCustomEntitySubmit = () => {
@@ -151,7 +162,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
         setSelectedCartridge(customCartridge);
         setShowCustomInput(false);
         setEditingEntity(null);
-        setCurrentStep(2);
+        setViewMode('MAPPER');
     };
 
     const handleIngestionComplete = async (payload: any) => {
@@ -182,7 +193,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
             // Return to staging area
             setSelectedCartridge(null);
             setEditingEntity(null);
-            setCurrentStep(0);
+            setViewMode('CARTRIDGES');
         } catch (error) {
             console.error("❌ Staging Failure:", error);
             alert("Failed to stage schema. See console for details.");
@@ -239,7 +250,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
     const handleBack = () => {
         setSelectedCartridge(null);
         setEditingEntity(null);
-        setCurrentStep(0);
+        setViewMode('CARTRIDGES');
     };
 
     if (isCheckingStatus) {
@@ -272,7 +283,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
                     Constitutional Ontology Manager
                 </h1>
                 <p className="text-slate-400 max-w-lg mx-auto">
-                    {currentStep === 0
+                    {viewMode === 'CARTRIDGES'
                         ? 'Manage your data schemas. Edit, delete, or add new entities.'
                         : `Configure ${selectedCartridge?.name} schema.`
                     }
@@ -280,7 +291,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
             </div>
 
             {/* Step 0: Staging Area */}
-            {currentStep === 0 && (
+            {viewMode === 'CARTRIDGES' && (
                 <div className="w-full max-w-5xl relative z-10 mb-12 space-y-8">
                     {/* Staged Entities Dashboard */}
                     {stagedEntities.length > 0 && (
@@ -344,8 +355,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
                                         key={cartridge.id}
                                         onClick={() => !isActive && handleCartridgeSelect(cartridge)}
                                         className={`group relative bg-slate-900/50 backdrop-blur-sm border rounded-2xl p-8 transition-all ${isActive
-                                                ? 'border-emerald-700 opacity-75'
-                                                : 'border-slate-800 hover:border-slate-700 hover:scale-105'
+                                            ? 'border-emerald-700 opacity-75'
+                                            : 'border-slate-800 hover:border-slate-700 hover:scale-105'
                                             }`}
                                     >
                                         <div className={`w-16 h-16 rounded-xl bg-gradient-to-br ${cartridge.color} flex items-center justify-center mb-4 shadow-lg ${!isActive && 'group-hover:shadow-xl'} transition-shadow`}>
@@ -436,7 +447,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
             )}
 
             {/* Step 2: Mapper */}
-            {currentStep === 2 && selectedCartridge && (
+            {viewMode === 'MAPPER' && selectedCartridge && (
                 <>
                     <div className="w-full max-w-5xl relative z-10 mb-4">
                         <button

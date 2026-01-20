@@ -164,6 +164,44 @@ async def lock_system():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/ontology/registry")
+async def get_registry():
+    """
+    [ONTOLOGY LIFECYCLE] Returns all registered schemas.
+    Used for UI state hydration and schema management.
+    """
+    try:
+        registry = domain_mgr.get_full_registry()
+        return {"status": "success", "registry": registry}
+    except Exception as e:
+        logger.error(f"Registry fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/ontology/schema/{entity_type}")
+async def delete_schema(entity_type: str):
+    """
+    [ONTOLOGY LIFECYCLE] Deletes a schema from the registry.
+    Only works when system is unlocked.
+    """
+    try:
+        # Check if system is locked
+        if domain_mgr.is_system_locked():
+            raise HTTPException(
+                status_code=423, 
+                detail="Cannot delete schema: System is locked"
+            )
+        
+        domain_mgr.delete_schema(entity_type)
+        return {
+            "status": "success", 
+            "message": f"{entity_type} schema deleted"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Schema deletion failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 # ==============================================================================
 # 3. ML & INTELLIGENCE ENDPOINTS

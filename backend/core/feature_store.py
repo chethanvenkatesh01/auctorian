@@ -93,6 +93,43 @@ class FeatureStore:
             full_df[Anchors.RETAIL_PRICE] = full_df[Anchors.RETAIL_PRICE].fillna(0)
         else:
              logger.warning("⚠️ [SENSOR] Price Anchor missing in Product Master.")
+        
+        # 8. Execute Derived Field Formulas
+        # Query schema_registry for fields with formulas
+        try:
+            derived_fields = domain_mgr.get_derived_fields()
+            if derived_fields:
+                logger.info(f"🧮 [FORMULA] Executing {len(derived_fields)} derived field formulas...")
+                for field in derived_fields:
+                    formula = field.get('formula')
+                    anchor_name = field.get('generic_anchor')
+                    
+                    if formula and anchor_name:
+                        # Translate UI formula to Pandas syntax
+                        # Replace [ANCHOR_NAME] with df['ANCHOR_NAME']
+                        pandas_formula = formula
+                        import re
+                        # Find all [ANCHOR_*] patterns
+                        anchor_refs = re.findall(r'\[([^\]]+)\]', formula)
+                        for ref in anchor_refs:
+                            if ref in full_df.columns:
+                                pandas_formula = pandas_formula.replace(f'[{ref}]', f'`{ref}`')
+                            else:
+                                logger.warning(f"⚠️ [FORMULA] Referenced anchor '{ref}' not found in data")
+                        
+                        try:
+                            # Execute formula with division by zero protection
+                            full_df[anchor_name] = full_df.eval(pandas_formula, engine='python')
+                            # Handle division by zero and inf
+                            full_df[anchor_name] = full_df[anchor_name].replace([float('inf'), float('-inf')], 0)
+                            full_df[anchor_name] = full_df[anchor_name].fillna(0)
+                            logger.info(f"  ✓ Calculated: {anchor_name} = {formula}")
+                        except Exception as e:
+                            logger.error(f"  ✗ Formula execution failed for {anchor_name}: {e}")
+                            # Create column with zeros if formula fails
+                            full_df[anchor_name] = 0
+        except Exception as e:
+            logger.warning(f"⚠️ [FORMULA] Could not fetch derived fields: {e}")
              
         logger.info(f"✅ [SENSOR] Master Table Ready: {len(full_df)} rows. Anchors Aligned.")
         return full_df

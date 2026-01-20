@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { IngestionMapper } from '../components/IngestionMapper';
 import { api } from '../services/api';
-import { Shield, Lock, Loader, Package, TrendingUp, Layers, Database, ArrowRight } from 'lucide-react';
+import { Shield, Lock, Loader, Package, TrendingUp, Layers, Database, ArrowRight, CheckCircle, AlertTriangle, Rocket } from 'lucide-react';
+import { SchemaField } from '../types';
 
 interface OnboardingWizardProps {
     onNavigate: (view: string) => void;
@@ -15,6 +16,14 @@ interface CartridgeOption {
     icon: React.ElementType;
     entityType: string;
     color: string;
+}
+
+interface StagedEntity {
+    entityType: string;
+    name: string;
+    fields: SchemaField[];
+    color: string;
+    icon: React.ElementType;
 }
 
 const CARTRIDGE_OPTIONS: CartridgeOption[] = [
@@ -54,10 +63,12 @@ const CARTRIDGE_OPTIONS: CartridgeOption[] = [
 
 export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }) => {
     const [isCheckingStatus, setIsCheckingStatus] = useState(true);
-    const [currentStep, setCurrentStep] = useState(0); // 0 = selector, 1 = mapper
+    const [currentStep, setCurrentStep] = useState(0); // 0 = staging, 1 = selector, 2 = mapper
     const [selectedCartridge, setSelectedCartridge] = useState<CartridgeOption | null>(null);
     const [customEntityName, setCustomEntityName] = useState('');
     const [showCustomInput, setShowCustomInput] = useState(false);
+    const [stagedEntities, setStagedEntities] = useState<StagedEntity[]>([]);
+    const [isLocking, setIsLocking] = useState(false);
 
     useEffect(() => {
         const checkStatus = async () => {
@@ -82,7 +93,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
             setShowCustomInput(true);
         } else {
             setSelectedCartridge(cartridge);
-            setCurrentStep(1);
+            setCurrentStep(2);
         }
     };
 
@@ -103,28 +114,67 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
 
         setSelectedCartridge(customCartridge);
         setShowCustomInput(false);
-        setCurrentStep(1);
+        setCurrentStep(2);
     };
 
     const handleIngestionComplete = async (payload: any) => {
         try {
-            console.log("📜 Registering Schema:", payload);
-            await api.ontology.registerSchema(payload.entityType, payload.fields);
+            console.log("📜 Staging Schema:", payload);
 
-            // For now, just go to command center after first entity
-            // In future, could loop back to Step 0 to add more entities
+            // Stage the entity instead of immediately registering
+            const stagedEntity: StagedEntity = {
+                entityType: payload.entityType,
+                name: selectedCartridge?.name || payload.entityType,
+                fields: payload.fields,
+                color: selectedCartridge?.color || 'from-slate-500 to-slate-600',
+                icon: selectedCartridge?.icon || Database
+            };
+
+            setStagedEntities(prev => [...prev, stagedEntity]);
+
+            // Return to staging area
+            setSelectedCartridge(null);
+            setCurrentStep(0);
+        } catch (error) {
+            console.error("❌ Staging Failure:", error);
+            alert("Failed to stage schema. See console for details.");
+        }
+    };
+
+    const handleFinalize = async () => {
+        if (stagedEntities.length === 0) {
+            alert('Please stage at least one entity first');
+            return;
+        }
+
+        setIsLocking(true);
+        try {
+            // Register all staged entities
+            for (const entity of stagedEntities) {
+                console.log(`📜 Registering ${entity.entityType}...`);
+                await api.ontology.registerSchema(entity.entityType, entity.fields);
+            }
+
+            // Lock the system
+            console.log("🔒 Locking Constitution...");
             await api.ontology.lockSystem();
-            console.log("✅ Constitution Locked!");
+
+            console.log("✅ Sovereign Brain Initialized!");
             onNavigate('command-center');
         } catch (error) {
-            console.error("❌ Constitutional Failure:", error);
-            alert("Failed to register schema. See console for details.");
+            console.error("❌ Finalization Failed:", error);
+            alert("Failed to initialize system. See console for details.");
+            setIsLocking(false);
         }
+    };
+
+    const handleRemoveStaged = (entityType: string) => {
+        setStagedEntities(prev => prev.filter(e => e.entityType !== entityType));
     };
 
     const handleBack = () => {
         setSelectedCartridge(null);
-        setCurrentStep(0);
+        setCurrentStep(currentStep === 2 ? 1 : 0);
     };
 
     if (isCheckingStatus) {
@@ -158,36 +208,121 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
                 </h1>
                 <p className="text-slate-400 max-w-lg mx-auto">
                     {currentStep === 0
-                        ? 'Select the type of data you want to onboard first.'
-                        : `Map your ${selectedCartridge?.name} to the Auctorian Constitution.`
+                        ? 'Stage your data entities. Add as many as needed before finalizing.'
+                        : currentStep === 1
+                            ? 'Select the type of data you want to onboard.'
+                            : `Map your ${selectedCartridge?.name} to the Auctorian Constitution.`
                     }
                 </p>
             </div>
 
-            {/* Step 0: Cartridge Selector */}
+            {/* Step 0: Staging Area & Selector */}
             {currentStep === 0 && (
-                <div className="w-full max-w-5xl relative z-10 mb-12">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {CARTRIDGE_OPTIONS.map((cartridge) => {
-                            const Icon = cartridge.icon;
-                            return (
-                                <button
-                                    key={cartridge.id}
-                                    onClick={() => handleCartridgeSelect(cartridge)}
-                                    className="group relative bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-2xl p-8 hover:border-slate-700 transition-all hover:scale-105"
-                                >
-                                    <div className={`w-16 h-16 rounded-xl bg-gradient-to-br ${cartridge.color} flex items-center justify-center mb-4 shadow-lg group-hover:shadow-xl transition-shadow`}>
-                                        <Icon className="text-white" size={32} />
-                                    </div>
-                                    <h3 className="text-xl font-bold text-white mb-2">{cartridge.name}</h3>
-                                    <p className="text-slate-400 text-sm">{cartridge.description}</p>
-                                    <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <ArrowRight className="text-slate-500" size={20} />
-                                    </div>
-                                </button>
-                            );
-                        })}
+                <div className="w-full max-w-5xl relative z-10 mb-12 space-y-8">
+                    {/* Staged Entities Dashboard */}
+                    {stagedEntities.length > 0 && (
+                        <div className="bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-2xl p-6">
+                            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                                <CheckCircle className="text-emerald-400" size={24} />
+                                Staged Entities ({stagedEntities.length})
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {stagedEntities.map((entity) => {
+                                    const Icon = entity.icon;
+                                    return (
+                                        <div key={entity.entityType} className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 relative">
+                                            <div className="flex items-start justify-between">
+                                                <div className="flex items-center gap-3">
+                                                    <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${entity.color} flex items-center justify-center`}>
+                                                        <Icon className="text-white" size={24} />
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-white font-bold">{entity.name}</div>
+                                                        <div className="text-slate-400 text-xs">{entity.fields.length} fields mapped</div>
+                                                        <div className="text-emerald-400 text-xs font-medium mt-1">✓ Ready</div>
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    onClick={() => handleRemoveStaged(entity.entityType)}
+                                                    className="text-slate-500 hover:text-red-400 text-xs"
+                                                >
+                                                    Remove
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Add More Entities */}
+                    <div>
+                        <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                            <Package className="text-indigo-400" size={20} />
+                            Add Entity Type
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {CARTRIDGE_OPTIONS.map((cartridge) => {
+                                const Icon = cartridge.icon;
+                                const isStaged = stagedEntities.some(e => e.entityType === cartridge.entityType && cartridge.id !== 'custom');
+                                return (
+                                    <button
+                                        key={cartridge.id}
+                                        onClick={() => !isStaged && handleCartridgeSelect(cartridge)}
+                                        disabled={isStaged}
+                                        className={`group relative bg-slate-900/50 backdrop-blur-sm border rounded-2xl p-8 transition-all ${isStaged
+                                                ? 'border-slate-700 opacity-50 cursor-not-allowed'
+                                                : 'border-slate-800 hover:border-slate-700 hover:scale-105'
+                                            }`}
+                                    >
+                                        <div className={`w-16 h-16 rounded-xl bg-gradient-to-br ${cartridge.color} flex items-center justify-center mb-4 shadow-lg ${!isStaged && 'group-hover:shadow-xl'} transition-shadow`}>
+                                            <Icon className="text-white" size={32} />
+                                        </div>
+                                        <h3 className="text-xl font-bold text-white mb-2">{cartridge.name}</h3>
+                                        <p className="text-slate-400 text-sm">{cartridge.description}</p>
+                                        {isStaged && (
+                                            <div className="absolute top-4 right-4 text-emerald-400 text-xs font-bold">
+                                                ✓ Staged
+                                            </div>
+                                        )}
+                                        {!isStaged && (
+                                            <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <ArrowRight className="text-slate-500" size={20} />
+                                            </div>
+                                        )}
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>
+
+                    {/* Finalize Button */}
+                    {stagedEntities.length > 0 && (
+                        <div className="mt-8">
+                            <button
+                                onClick={handleFinalize}
+                                disabled={isLocking}
+                                className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold py-6 rounded-2xl hover:shadow-2xl hover:shadow-emerald-500/20 transition-all flex items-center justify-center gap-3 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {isLocking ? (
+                                    <>
+                                        <Loader className="animate-spin" size={24} />
+                                        <span>Initializing Sovereign Brain...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Rocket size={24} />
+                                        <span>Initialize Sovereign Brain & Lock Constitution</span>
+                                        <Lock size={24} />
+                                    </>
+                                )}
+                            </button>
+                            <p className="text-center text-slate-500 text-xs mt-3">
+                                This will register {stagedEntities.length} {stagedEntities.length === 1 ? 'entity' : 'entities'} and make the schema immutable.
+                            </p>
+                        </div>
+                    )}
 
                     {/* Custom Entity Input Modal */}
                     {showCustomInput && (
@@ -228,8 +363,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
                 </div>
             )}
 
-            {/* Step 1: Mapper */}
-            {currentStep === 1 && selectedCartridge && (
+            {/* Step 2: Mapper */}
+            {currentStep === 2 && selectedCartridge && (
                 <>
                     {/* Back Button */}
                     <div className="w-full max-w-5xl relative z-10 mb-4">
@@ -237,7 +372,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
                             onClick={handleBack}
                             className="text-slate-400 hover:text-white text-sm font-medium flex items-center gap-2"
                         >
-                            ← Back to Cartridge Selection
+                            ← Back to Staging Area
                         </button>
                     </div>
 
@@ -255,7 +390,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
             {/* Footer Status */}
             <div className="mt-auto relative z-10 flex items-center gap-2 text-slate-600 text-sm font-mono shrink-0">
                 <Lock size={14} />
-                <span>SYSTEM STATUS: UNLOCKED (EDITABLE)</span>
+                <span>SYSTEM STATUS: UNLOCKED (STAGING MODE)</span>
             </div>
         </div>
     );

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Upload, FileText, ArrowRight, AlertCircle, X, Lock, Zap, Package, TrendingUp, Cloud, Sparkles, Plus, Calculator } from 'lucide-react';
 import { ConstitutionalFamily, SchemaField, AnchorDefinition } from '../types';
 import { FormulaBuilderModal } from './FormulaBuilderModal';
@@ -7,6 +7,7 @@ interface IngestionMapperProps {
   title: string;
   description: string;
   entityType: string; // Dynamic: 'PRODUCT', 'TRANSACTION', 'INVENTORY', or custom
+  initialSchema?: SchemaField[]; // For edit mode - pre-fill from existing schema
   onComplete: (result: any) => void;
 }
 
@@ -49,7 +50,7 @@ const FAMILY_ICONS = {
   [ConstitutionalFamily.ENVIRONMENTAL]: Cloud,
 };
 
-export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, description, entityType, onComplete }) => {
+export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, description, entityType, initialSchema, onComplete }) => {
   const [file, setFile] = useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvData, setCsvData] = useState<string[][]>([]);
@@ -60,6 +61,36 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
   const [isFormulaModalOpen, setIsFormulaModalOpen] = useState(false);
   const [currentFormulaField, setCurrentFormulaField] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // EDIT MODE: Hydrate from initialSchema (CTO's critical feedback)
+  useEffect(() => {
+    if (initialSchema && initialSchema.length > 0) {
+      // Reconstruct headers from schema (source column names)
+      const headers = initialSchema
+        .filter(f => !f.formula) // Exclude derived fields
+        .map(f => f.source_column_name || f.name);
+
+      setCsvHeaders(headers);
+
+      // Rebuild mappings
+      const initialMappings = new Map<string, SchemaField>();
+      const initialDerived = new Map<string, SchemaField>();
+
+      initialSchema.forEach(field => {
+        if (field.formula) {
+          initialDerived.set(field.name, field);
+        } else {
+          const columnName = field.source_column_name || field.name;
+          initialMappings.set(columnName, field);
+        }
+      });
+
+      setMappings(initialMappings);
+      setDerivedFields(initialDerived);
+
+      console.log(`✏️ Edit Mode: Hydrated ${initialMappings.size} fields + ${initialDerived.size} formulas`);
+    }
+  }, [initialSchema]);
 
   // Determine anchor catalog based on entity type
   const getAnchorCatalog = (): AnchorDefinition[] => {

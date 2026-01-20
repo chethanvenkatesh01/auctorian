@@ -275,6 +275,64 @@ class DomainManager:
         finally:
             conn.close()
 
+    def get_full_registry(self) -> Dict[str, List[Dict]]:
+        """
+        Returns all registered schemas grouped by entity type.
+        Used for UI state hydration and schema management.
+        """
+        conn = get_db_connection(self.db_path)
+        try:
+            query = "SELECT * FROM schema_registry ORDER BY entity_type, hierarchy_level"
+            
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(query)
+                    rows = cur.fetchall()
+                    all_fields = [dict(r) for r in rows]
+            else:
+                rows = conn.execute(query).fetchall()
+                all_fields = [dict(r) for r in rows]
+            
+            # Group by entity_type
+            registry = {}
+            for field in all_fields:
+                entity_type = field.get('entity_type')
+                if entity_type not in registry:
+                    registry[entity_type] = []
+                registry[entity_type].append(field)
+            
+            logger.info(f"📋 [REGISTRY] Loaded {len(registry)} entity schemas")
+            return registry
+        except Exception as e:
+            logger.error(f"Failed to fetch registry: {e}")
+            return {}
+        finally:
+            conn.close()
+
+    def delete_schema(self, entity_type: str):
+        """
+        Removes a schema from the registry.
+        WARNING: This is a destructive operation.
+        """
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder()
+        try:
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM schema_registry WHERE entity_type = {ph}", (entity_type,))
+                conn.commit()
+            else:
+                conn.execute(f"DELETE FROM schema_registry WHERE entity_type = {ph}", (entity_type,))
+                conn.commit()
+            
+            logger.info(f"🗑️ [REGISTRY] Deleted schema: {entity_type}")
+        except Exception as e:
+            logger.error(f"Failed to delete schema {entity_type}: {e}")
+            raise
+        finally:
+            conn.close()
+
     def get_stats(self):
         """Telemetry for the Command Center."""
         conn = get_db_connection(self.db_path)

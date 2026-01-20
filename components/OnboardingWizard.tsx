@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { IngestionMapper } from '../components/IngestionMapper';
 import { api } from '../services/api';
-import { Shield, Lock, Loader, Package, TrendingUp, Layers, Database, ArrowRight, CheckCircle, AlertTriangle, Rocket } from 'lucide-react';
+import { Shield, Lock, Loader, Package, TrendingUp, Layers, Database, ArrowRight, CheckCircle, Rocket, Trash2, Edit } from 'lucide-react';
 import { SchemaField } from '../types';
 
 interface OnboardingWizardProps {
@@ -68,10 +68,13 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
     const [customEntityName, setCustomEntityName] = useState('');
     const [showCustomInput, setShowCustomInput] = useState(false);
     const [stagedEntities, setStagedEntities] = useState<StagedEntity[]>([]);
+    const [registeredSchemas, setRegisteredSchemas] = useState<Record<string, SchemaField[]>>({});
     const [isLocking, setIsLocking] = useState(false);
+    const [editingEntity, setEditingEntity] = useState<string | null>(null);
 
+    // STATE HYDRATION: Load existing schemas on mount
     useEffect(() => {
-        const checkStatus = async () => {
+        const init = async () => {
             try {
                 const status = await api.system.getStatus();
                 if (status.is_locked) {
@@ -79,13 +82,36 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
                     onNavigate('command-center');
                     return;
                 }
+
+                // Load existing schemas from registry
+                try {
+                    const registry = await api.ontology.getRegistry();
+                    setRegisteredSchemas(registry);
+
+                    // Reconstruct staged entities from registry
+                    const staged: StagedEntity[] = Object.entries(registry).map(([entityType, fields]) => {
+                        const matchingCartridge = CARTRIDGE_OPTIONS.find(c => c.entityType === entityType);
+                        return {
+                            entityType,
+                            name: matchingCartridge?.name || entityType,
+                            fields: fields as SchemaField[],
+                            color: matchingCartridge?.color || 'from-slate-500 to-slate-600',
+                            icon: matchingCartridge?.icon || Database
+                        };
+                    });
+                    setStagedEntities(staged);
+                    console.log(`📋 Hydrated ${staged.length} existing schemas`);
+                } catch (e) {
+                    console.error("Failed to load registry:", e);
+                }
+
                 setIsCheckingStatus(false);
             } catch (e) {
                 console.error("System check failed", e);
                 setIsCheckingStatus(false);
             }
         };
-        checkStatus();
+        init();
     }, [onNavigate]);
 
     const handleCartridgeSelect = (cartridge: CartridgeOption) => {
@@ -93,6 +119,16 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
             setShowCustomInput(true);
         } else {
             setSelectedCartridge(cartridge);
+            setEditingEntity(null); // New entity
+            setCurrentStep(2);
+        }
+    };
+
+    const handleEditEntity = (entity: StagedEntity) => {
+        const matchingCartridge = CARTRIDGE_OPTIONS.find(c => c.entityType === entity.entityType);
+        if (matchingCartridge) {
+            setSelectedCartridge(matchingCartridge);
+            setEditingEntity(entity.entityType);
             setCurrentStep(2);
         }
     };
@@ -114,6 +150,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
 
         setSelectedCartridge(customCartridge);
         setShowCustomInput(false);
+        setEditingEntity(null);
         setCurrentStep(2);
     };
 
@@ -121,7 +158,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
         try {
             console.log("📜 Staging Schema:", payload);
 
-            // Stage the entity instead of immediately registering
+            // Stage the entity
             const stagedEntity: StagedEntity = {
                 entityType: payload.entityType,
                 name: selectedCartridge?.name || payload.entityType,
@@ -130,14 +167,45 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
                 icon: selectedCartridge?.icon || Database
             };
 
-            setStagedEntities(prev => [...prev, stagedEntity]);
+            // Update or add to staged entities
+            setStagedEntities(prev => {
+                const filtered = prev.filter(e => e.entityType !== payload.entityType);
+                return [...filtered, stagedEntity];
+            });
+
+            // Update registered schemas
+            setRegisteredSchemas(prev => ({
+                ...prev,
+                [payload.entityType]: payload.fields
+            }));
 
             // Return to staging area
             setSelectedCartridge(null);
+            setEditingEntity(null);
             setCurrentStep(0);
         } catch (error) {
             console.error("❌ Staging Failure:", error);
             alert("Failed to stage schema. See console for details.");
+        }
+    };
+
+    const handleDeleteSchema = async (entityType: string) => {
+        if (!confirm(`Delete ${entityType} schema? This cannot be undone.`)) return;
+
+        try {
+            await api.ontology.deleteSchema(entityType);
+
+            // Remove from local state
+            const updated = { ...registeredSchemas };
+            delete updated[entityType];
+            setRegisteredSchemas(updated);
+
+            // Remove from staged entities
+            setStagedEntities(prev => prev.filter(e => e.entityType !== entityType));
+
+            console.log(`🗑️ Deleted ${entityType}`);
+        } catch (e: any) {
+            alert(`Failed to delete: ${e.message || e}`);
         }
     };
 
@@ -168,13 +236,10 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
         }
     };
 
-    const handleRemoveStaged = (entityType: string) => {
-        setStagedEntities(prev => prev.filter(e => e.entityType !== entityType));
-    };
-
     const handleBack = () => {
         setSelectedCartridge(null);
-        setCurrentStep(currentStep === 2 ? 1 : 0);
+        setEditingEntity(null);
+        setCurrentStep(0);
     };
 
     if (isCheckingStatus) {
@@ -201,22 +266,20 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
             <div className="mb-8 text-center relative z-10 shrink-0">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-slate-400 text-xs font-mono mb-4">
                     <Shield size={12} className="text-emerald-400" />
-                    <span>SECURE ENCLAVE // CONSTITUTIONAL PHASE</span>
+                    <span>SECURE ENCLAVE // ONTOLOGY MANAGER</span>
                 </div>
                 <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">
-                    Initialize Sovereign Node
+                    Constitutional Ontology Manager
                 </h1>
                 <p className="text-slate-400 max-w-lg mx-auto">
                     {currentStep === 0
-                        ? 'Stage your data entities. Add as many as needed before finalizing.'
-                        : currentStep === 1
-                            ? 'Select the type of data you want to onboard.'
-                            : `Map your ${selectedCartridge?.name} to the Auctorian Constitution.`
+                        ? 'Manage your data schemas. Edit, delete, or add new entities.'
+                        : `Configure ${selectedCartridge?.name} schema.`
                     }
                 </p>
             </div>
 
-            {/* Step 0: Staging Area & Selector */}
+            {/* Step 0: Staging Area */}
             {currentStep === 0 && (
                 <div className="w-full max-w-5xl relative z-10 mb-12 space-y-8">
                     {/* Staged Entities Dashboard */}
@@ -224,30 +287,40 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
                         <div className="bg-slate-900/50 backdrop-blur-sm border border-slate-800 rounded-2xl p-6">
                             <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
                                 <CheckCircle className="text-emerald-400" size={24} />
-                                Staged Entities ({stagedEntities.length})
+                                Active Entities ({stagedEntities.length})
                             </h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 {stagedEntities.map((entity) => {
                                     const Icon = entity.icon;
                                     return (
-                                        <div key={entity.entityType} className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 relative">
+                                        <div key={entity.entityType} className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 relative group">
                                             <div className="flex items-start justify-between">
-                                                <div className="flex items-center gap-3">
-                                                    <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${entity.color} flex items-center justify-center`}>
+                                                <div className="flex items-center gap-3 flex-1">
+                                                    <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${entity.color} flex items-center justify-center shrink-0`}>
                                                         <Icon className="text-white" size={24} />
                                                     </div>
-                                                    <div>
+                                                    <div className="flex-1">
                                                         <div className="text-white font-bold">{entity.name}</div>
                                                         <div className="text-slate-400 text-xs">{entity.fields.length} fields mapped</div>
-                                                        <div className="text-emerald-400 text-xs font-medium mt-1">✓ Ready</div>
+                                                        <div className="text-emerald-400 text-xs font-medium mt-1">✓ Active</div>
                                                     </div>
                                                 </div>
-                                                <button
-                                                    onClick={() => handleRemoveStaged(entity.entityType)}
-                                                    className="text-slate-500 hover:text-red-400 text-xs"
-                                                >
-                                                    Remove
-                                                </button>
+                                                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button
+                                                        onClick={() => handleEditEntity(entity)}
+                                                        className="text-indigo-400 hover:text-indigo-300 p-2"
+                                                        title="Edit"
+                                                    >
+                                                        <Edit size={16} />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDeleteSchema(entity.entityType)}
+                                                        className="text-red-400 hover:text-red-300 p-2"
+                                                        title="Delete"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                     );
@@ -265,28 +338,27 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             {CARTRIDGE_OPTIONS.map((cartridge) => {
                                 const Icon = cartridge.icon;
-                                const isStaged = stagedEntities.some(e => e.entityType === cartridge.entityType && cartridge.id !== 'custom');
+                                const isActive = !!registeredSchemas[cartridge.entityType] && cartridge.id !== 'custom';
                                 return (
                                     <button
                                         key={cartridge.id}
-                                        onClick={() => !isStaged && handleCartridgeSelect(cartridge)}
-                                        disabled={isStaged}
-                                        className={`group relative bg-slate-900/50 backdrop-blur-sm border rounded-2xl p-8 transition-all ${isStaged
-                                                ? 'border-slate-700 opacity-50 cursor-not-allowed'
+                                        onClick={() => !isActive && handleCartridgeSelect(cartridge)}
+                                        className={`group relative bg-slate-900/50 backdrop-blur-sm border rounded-2xl p-8 transition-all ${isActive
+                                                ? 'border-emerald-700 opacity-75'
                                                 : 'border-slate-800 hover:border-slate-700 hover:scale-105'
                                             }`}
                                     >
-                                        <div className={`w-16 h-16 rounded-xl bg-gradient-to-br ${cartridge.color} flex items-center justify-center mb-4 shadow-lg ${!isStaged && 'group-hover:shadow-xl'} transition-shadow`}>
+                                        <div className={`w-16 h-16 rounded-xl bg-gradient-to-br ${cartridge.color} flex items-center justify-center mb-4 shadow-lg ${!isActive && 'group-hover:shadow-xl'} transition-shadow`}>
                                             <Icon className="text-white" size={32} />
                                         </div>
                                         <h3 className="text-xl font-bold text-white mb-2">{cartridge.name}</h3>
                                         <p className="text-slate-400 text-sm">{cartridge.description}</p>
-                                        {isStaged && (
+                                        {isActive && (
                                             <div className="absolute top-4 right-4 text-emerald-400 text-xs font-bold">
-                                                ✓ Staged
+                                                ✓ Active
                                             </div>
                                         )}
-                                        {!isStaged && (
+                                        {!isActive && (
                                             <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
                                                 <ArrowRight className="text-slate-500" size={20} />
                                             </div>
@@ -366,13 +438,12 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
             {/* Step 2: Mapper */}
             {currentStep === 2 && selectedCartridge && (
                 <>
-                    {/* Back Button */}
                     <div className="w-full max-w-5xl relative z-10 mb-4">
                         <button
                             onClick={handleBack}
                             className="text-slate-400 hover:text-white text-sm font-medium flex items-center gap-2"
                         >
-                            ← Back to Staging Area
+                            ← Back to Ontology Manager
                         </button>
                     </div>
 
@@ -381,6 +452,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
                             title={selectedCartridge.name}
                             description={selectedCartridge.description}
                             entityType={selectedCartridge.entityType}
+                            initialSchema={editingEntity ? registeredSchemas[editingEntity] : undefined}
                             onComplete={handleIngestionComplete}
                         />
                     </div>
@@ -390,7 +462,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onNavigate }
             {/* Footer Status */}
             <div className="mt-auto relative z-10 flex items-center gap-2 text-slate-600 text-sm font-mono shrink-0">
                 <Lock size={14} />
-                <span>SYSTEM STATUS: UNLOCKED (STAGING MODE)</span>
+                <span>SYSTEM STATUS: UNLOCKED ({stagedEntities.length} entities configured)</span>
             </div>
         </div>
     );

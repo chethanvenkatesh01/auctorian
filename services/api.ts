@@ -334,6 +334,18 @@ export const api = {
     lockSystem: async () => {
       const res = await client.post('/ontology/lock');
       return res.data;
+    },
+
+    // [ONTOLOGY LIFECYCLE] Get all registered schemas
+    getRegistry: async () => {
+      const res = await client.get('/ontology/registry');
+      return res.data.registry;
+    },
+
+    // [ONTOLOGY LIFECYCLE] Delete a schema
+    deleteSchema: async (entityType: string) => {
+      const res = await client.delete(`/ontology/schema/${entityType}`);
+      return res.data;
     }
   },
 

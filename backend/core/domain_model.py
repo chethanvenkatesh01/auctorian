@@ -251,6 +251,30 @@ class DomainManager:
         finally:
             conn.close()
 
+    def get_derived_fields(self) -> List[Dict]:
+        """
+        Fetches all fields from schema_registry that have formulas defined.
+        Used by feature_store to calculate derived columns.
+        """
+        conn = get_db_connection(self.db_path)
+        try:
+            query = "SELECT generic_anchor, formula FROM schema_registry WHERE formula IS NOT NULL"
+            
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(query)
+                    rows = cur.fetchall()
+                    return [dict(r) for r in rows]
+            else:
+                rows = conn.execute(query).fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"Failed to fetch derived fields: {e}")
+            return []
+        finally:
+            conn.close()
+
     def get_stats(self):
         """Telemetry for the Command Center."""
         conn = get_db_connection(self.db_path)

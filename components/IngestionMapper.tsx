@@ -263,18 +263,21 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
                   <tr key={idx} className="border-b hover:bg-slate-50">
                     <td className="p-3 font-mono text-xs">{field.source_column_name}</td>
                     <td className="p-3">
-                      <select
+                      <input
+                        type="text"
+                        list={`generic-targets-${idx}`}
                         value={field.generic_column_name}
                         onChange={(e) => updateField(idx, { generic_column_name: e.target.value })}
-                        className="w-full text-xs border rounded p-1.5"
-                      >
-                        <option value="">-- Select Target --</option>
+                        placeholder="Select standard or type custom..."
+                        className="w-full text-xs border rounded p-1.5 focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200"
+                      />
+                      <datalist id={`generic-targets-${idx}`}>
                         {standardSchema.map(s => (
                           <option key={s.column} value={s.column}>
-                            {s.display} {s.required && '*'}
+                            {s.display} {s.required && '(Required)'}
                           </option>
                         ))}
-                      </select>
+                      </datalist>
                     </td>
                     <td className="p-3 text-center text-xs text-slate-500">{field.source_column_datatype}</td>
                     <td className="p-3 text-center">

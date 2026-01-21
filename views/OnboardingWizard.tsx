@@ -4,9 +4,7 @@ import { api } from '../services/api';
 import { Shield, Lock, CheckCircle, Package, TrendingUp, Layers, Truck, ArrowRight, Plus, Trash2 } from 'lucide-react';
 import { SchemaField } from '../types';
 
-// CARTRIDGE DEF
-
-INITIONS
+// CARTRIDGE DEFINITIONS
 const CARTRIDGES = [
     {
         id: 'RETAIL',

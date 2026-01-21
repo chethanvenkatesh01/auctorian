@@ -1,6 +1,4 @@
-// views/OnboardingWizard.tsx
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { IngestionMapper } from '../components/IngestionMapper';
 import { api } from '../services/api';
 import { Shield, Lock, Layers, CheckCircle, ArrowRight, Package, TrendingUp, Plus, Trash2 } from 'lucide-react';
@@ -13,7 +11,6 @@ const CARTRIDGES = [
 ];
 
 export const OnboardingWizard: React.FC = () => {
-    const navigate = useNavigate();
     // STATE MACHINE: HIERARCHY -> CARTRIDGES -> MAPPER
     const [viewMode, setViewMode] = useState<'HIERARCHY' | 'CARTRIDGES' | 'MAPPER'>('HIERARCHY');
 
@@ -141,7 +138,7 @@ export const OnboardingWizard: React.FC = () => {
                 {CARTRIDGES.map(cart => {
                     const isActive = !!registeredSchemas[cart.id];
                     return (
-                        <div key={cart.id} onClick={() => handleOpenMapper(cart.id)} className={`p-6 rounded-2xl border cursor-pointer hover:scale-105 transition-all relative ${isActive ? 'bg-emerald-900/20 border-emerald-500' : 'bg-slate-900 border-slate-800'}`}>
+                        <div key={cart.id} onClick={() => handleOpenMapper(cart.id)} className={`p-6 rounded-2xl border cursor-pointer hover:scale-105 transition-all ${isActive ? 'bg-emerald-900/20 border-emerald-500' : 'bg-slate-900 border-slate-800'}`}>
                             <div className="flex justify-between items-start mb-4">
                                 <cart.icon className={isActive ? 'text-emerald-400' : 'text-slate-400'} size={24} />
                                 {isActive && <CheckCircle className="text-emerald-400" size={20} />}

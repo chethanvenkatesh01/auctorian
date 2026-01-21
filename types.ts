@@ -69,11 +69,16 @@ export interface CartridgeManifest {
   dataSchema: DataSchemaField[];
   policies: any[];
   prompts: any[];
+  status?: 'ACTIVE' | 'INSTALLED' | 'AVAILABLE';
+  // The entities this cartridge supports (e.g. ['PRODUCT', 'TRANSACTION'])
+  supportedEntities: string[];
+  icon?: any;  // Added for UI rendering
+  description?: string; // Added for UI rendering
 }
 
 export interface EnterpriseConfig {
   hierarchy: { id: string; label: string; isPlanningEnabled: boolean }[];
-  timeBuckets: string[]; 
+  timeBuckets: string[];
 }
 
 // --- 4. LEGACY PLANNING TYPES (For Dashboards/Summaries) ---
@@ -139,12 +144,12 @@ export interface PlanNode {
   id: string;           // Unique ID (e.g., "DIV-Footwear")
   name: string;         // Display Name (e.g., "Footwear")
   level: string;        // Ontology Level (e.g., "Division")
-  
+
   // The Data Cube: Key = Period ID (e.g., "2026-01") -> Value = Metrics
-  data: Record<string, PeriodData>; 
-  
+  data: Record<string, PeriodData>;
+
   // Hierarchy
-  children: PlanNode[]; 
+  children: PlanNode[];
   isExpanded?: boolean; // UI State
   parentId?: string | null;
 }
@@ -175,9 +180,9 @@ export interface MetricCardProps {
 }
 
 export interface ForecastResult {
-    sku: string;
-    forecast: { date: string; value: number; lower: number; upper: number }[];
-    confidence: number;
+  sku: string;
+  forecast: { date: string; value: number; lower: number; upper: number }[];
+  confidence: number;
 }
 
 // =============================================================================
@@ -192,14 +197,33 @@ export enum ConstitutionalFamily {
 }
 
 export interface SchemaField {
-  name: string;                    // Source column name from CSV
-  generic_anchor?: string;         // System anchor (e.g., 'ANCHOR_RETAIL_PRICE')
-  family_type: ConstitutionalFamily;
-  is_pk?: boolean;
-  is_attribute?: boolean;
-  is_hierarchy?: boolean;
-  hierarchy_level?: number;
-  formula?: string;
+  // SOURCE (Client)
+  source_column_name: string;
+  source_column_datatype: string;
+
+  // GENERIC (Auctorian Standard)
+  generic_column_name: string;          // The canonical name (e.g. 'product_id')
+  generic_column_datatype: string;
+  display_name: string;
+
+  // CONSTRAINTS & PHYSICS
+  is_pk: boolean;                       // Primary Key
+  is_hierarchy: boolean;                // Part of the graph structure
+  hierarchy_level?: number;             // 1 = Highest (Division), 5 = Lowest (SKU)
+  is_attribute: boolean;                // Descriptive feature
+  is_partition_col: boolean;            // For BigQuery/Snowflake partitioning
+  is_clustering_col: boolean;           // For query optimization
+  is_null_allowed: boolean;
+  unique_by?: string;
+
+  // LOGIC
+  required_in_product: boolean;        // Is this field mandatory for the cartridge?
+  formula?: string;                     // Synthetic feature logic
+
+  // LEGACY (for backward compatibility)
+  name?: string;                        // Alias for source_column_name
+  generic_anchor?: string;              // Old anchor system
+  family_type?: ConstitutionalFamily;  // Old family classification
 }
 
 export interface AnchorDefinition {

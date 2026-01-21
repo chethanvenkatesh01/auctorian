@@ -1,9 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {
-    Ing
-
-estionMapper
-} from '../components/IngestionMapper';
+import { IngestionMapper } from '../components/IngestionMapper';
 import { api } from '../services/api';
 import { Shield, Lock, CheckCircle, Package, TrendingUp, Layers, Truck, ArrowRight, Plus, Trash2 } from 'lucide-react';
 import { SchemaField } from '../types';
@@ -116,8 +112,8 @@ export const OnboardingWizard: React.FC = () => {
                                 key={cart.id}
                                 onClick={() => isAvailable && handleCartridgeSelect(cart.id)}
                                 className={`p-10 rounded-2xl border-2 transition-all ${isAvailable
-                                        ? 'bg-slate-900 border-slate-700 cursor-pointer hover:border-indigo-500 hover:scale-105'
-                                        : 'bg-slate-900/50 border-slate-800 opacity-60 cursor-not-allowed'
+                                    ? 'bg-slate-900 border-slate-700 cursor-pointer hover:border-indigo-500 hover:scale-105'
+                                    : 'bg-slate-900/50 border-slate-800 opacity-60 cursor-not-allowed'
                                     }`}
                             >
                                 <Icon className={isAvailable ? 'text-indigo-400' : 'text-slate-600'} size={48} />

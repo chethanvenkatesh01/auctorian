@@ -1,183 +1,81 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, FileText, ArrowRight, AlertCircle, X, Lock, Zap, Package, TrendingUp, Cloud, Sparkles, Plus, Calculator } from 'lucide-react';
-import { ConstitutionalFamily, SchemaField, AnchorDefinition } from '../types';
-import { FormulaBuilderModal } from './FormulaBuilderModal';
+import { Upload, FileText, X, Lock, AlertCircle, Sparkles, Settings } from 'lucide-react';
+import { SchemaField } from '../types';
 
 interface IngestionMapperProps {
   title: string;
   description: string;
-  entityType: string; // Dynamic: 'PRODUCT', 'TRANSACTION', 'INVENTORY', or custom
-  initialSchema?: SchemaField[]; // For edit mode - pre-fill from existing schema
+  entityType: string;
+  initialSchema?: SchemaField[];
   onComplete: (result: any) => void;
 }
 
-// Core Anchor Catalogs by Entity Type
-const PRODUCT_ANCHORS: AnchorDefinition[] = [
-  { anchor: 'ANCHOR_PRODUCT_ID', label: 'Product ID', family: ConstitutionalFamily.INTRINSIC, mandatory: true, description: 'Unique identifier', unlocks: 'System Identity' },
-  { anchor: 'ANCHOR_PRODUCT_NAME', label: 'Product Name', family: ConstitutionalFamily.INTRINSIC, mandatory: true, description: 'Display name' },
-  { anchor: 'ANCHOR_CATEGORY', label: 'Category', family: ConstitutionalFamily.INTRINSIC, mandatory: false, description: 'Hierarchy Level 1' },
-  { anchor: 'ANCHOR_RETAIL_PRICE', label: 'Retail Price', family: ConstitutionalFamily.STATE, mandatory: true, description: 'Revenue Physics', unlocks: 'Price Optimization' },
-  { anchor: 'ANCHOR_STOCK_ON_HAND', label: 'Stock on Hand', family: ConstitutionalFamily.STATE, mandatory: false, description: 'Inventory snapshot', unlocks: 'Censored Demand Logic' },
-  { anchor: 'ANCHOR_LAUNCH_DATE', label: 'Launch Date', family: ConstitutionalFamily.STATE, mandatory: false, description: 'Product birth', unlocks: 'NPI Forecasting' },
-];
-
-const TRANSACTION_ANCHORS: AnchorDefinition[] = [
-  { anchor: 'ANCHOR_TX_ID', label: 'Transaction ID', family: ConstitutionalFamily.INTRINSIC, mandatory: true, description: 'Unique transaction ID' },
-  { anchor: 'ANCHOR_PRODUCT_ID', label: 'Product ID', family: ConstitutionalFamily.INTRINSIC, mandatory: true, description: 'Product reference' },
-  { anchor: 'ANCHOR_DATE', label: 'Transaction Date', family: ConstitutionalFamily.STATE, mandatory: true, description: 'Timestamp' },
-  { anchor: 'ANCHOR_SALES_QTY', label: 'Sales Quantity', family: ConstitutionalFamily.PERFORMANCE, mandatory: true, description: 'Units sold', unlocks: 'Demand Forecasting' },
-  { anchor: 'ANCHOR_SALES_VAL', label: 'Sales Value', family: ConstitutionalFamily.PERFORMANCE, mandatory: false, description: 'Revenue generated' },
-];
-
-const INVENTORY_ANCHORS: AnchorDefinition[] = [
-  { anchor: 'ANCHOR_PRODUCT_ID', label: 'Product ID', family: ConstitutionalFamily.INTRINSIC, mandatory: true, description: 'Product reference' },
-  { anchor: 'ANCHOR_DATE', label: 'Snapshot Date', family: ConstitutionalFamily.STATE, mandatory: true, description: 'Inventory date' },
-  { anchor: 'ANCHOR_STOCK_ON_HAND', label: 'Stock on Hand', family: ConstitutionalFamily.STATE, mandatory: true, description: 'Current inventory', unlocks: 'Stockout Prediction' },
-  { anchor: 'ANCHOR_ON_ORDER', label: 'On Order', family: ConstitutionalFamily.STATE, mandatory: false, description: 'Units in transit' },
-];
-
-const FAMILY_COLORS = {
-  [ConstitutionalFamily.INTRINSIC]: { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200' },
-  [ConstitutionalFamily.STATE]: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
-  [ConstitutionalFamily.PERFORMANCE]: { bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
-  [ConstitutionalFamily.ENVIRONMENTAL]: { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+// CARTRIDGE-DEFINED STANDARD SCHEMAS (The "Generic" Targets)
+const STANDARD_SCHEMAS: Record<string, { column: string; datatype: string; display: string; required: boolean }[]> = {
+  PRODUCT: [
+    { column: 'product_id', datatype: 'string', display: 'Product ID', required: true },
+    { column: 'product_name', datatype: 'string', display: 'Product Name', required: true },
+    { column: 'category_code', datatype: 'string', display: 'Category Code', required: false },
+    { column: 'department_code', datatype: 'string', display: 'Department Code', required: false },
+    { column: 'division_code', datatype: 'string', display: 'Division Code', required: false },
+    { column: 'retail_price', datatype: 'decimal', display: 'Retail Price', required: true },
+    { column: 'cost_price', datatype: 'decimal', display: 'Cost Price', required: false },
+    { column: 'stock_on_hand', datatype: 'integer', display: 'Stock on Hand', required: false },
+    { column: 'launch_date', datatype: 'date', display: 'Launch Date', required: false },
+  ],
+  TRANSACTION: [
+    { column: 'transaction_id', datatype: 'string', display: 'Transaction ID', required: true },
+    { column: 'transaction_date', datatype: 'date', display: 'Transaction Date', required: true },
+    { column: 'product_id', datatype: 'string', display: 'Product ID', required: true },
+    { column: 'store_id', datatype: 'string', display: 'Store ID', required: false },
+    { column: 'sales_quantity', datatype: 'integer', display: 'Sales Quantity', required: true },
+    { column: 'sales_value', datatype: 'decimal', display: 'Sales Value', required: false },
+  ],
+  INVENTORY: [
+    { column: 'product_id', datatype: 'string', display: 'Product ID', required: true },
+    { column: 'snapshot_date', datatype: 'date', display: 'Snapshot Date', required: true },
+    { column: 'stock_on_hand', datatype: 'integer', display: 'Stock on Hand', required: true },
+    { column: 'on_order', datatype: 'integer', display: 'On Order', required: false },
+  ],
 };
 
-const FAMILY_ICONS = {
-  [ConstitutionalFamily.INTRINSIC]: Package,
-  [ConstitutionalFamily.STATE]: Zap,
-  [ConstitutionalFamily.PERFORMANCE]: TrendingUp,
-  [ConstitutionalFamily.ENVIRONMENTAL]: Cloud,
+// Smart defaults for auto-detection
+const detectDatatype = (values: string[]): string => {
+  if (values.every(v => !isNaN(Number(v)) && !v.includes('.'))) return 'integer';
+  if (values.every(v => !isNaN(Number(v)))) return 'decimal';
+  if (values.every(v => /^\d{4}-\d{2}-\d{2}/.test(v))) return 'date';
+  return 'string';
 };
 
 export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, description, entityType, initialSchema, onComplete }) => {
   const [file, setFile] = useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvData, setCsvData] = useState<string[][]>([]);
-  const [mappings, setMappings] = useState<Map<string, SchemaField>>(new Map());
-  const [derivedFields, setDerivedFields] = useState<Map<string, SchemaField>>(new Map()); // Formula-based fields
+  const [schemaFields, setSchemaFields] = useState<SchemaField[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isFormulaModalOpen, setIsFormulaModalOpen] = useState(false);
-  const [currentFormulaField, setCurrentFormulaField] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // EDIT MODE: Hydrate from initialSchema (CTO's critical feedback)
+  const standardSchema = STANDARD_SCHEMAS[entityType] || [];
+
+  // EDIT MODE: Hydrate from initialSchema
   useEffect(() => {
     if (initialSchema && initialSchema.length > 0) {
-      // Reconstruct headers from schema (source column names)
-      const headers = initialSchema
-        .filter(f => !f.formula) // Exclude derived fields
-        .map(f => f.source_column_name || f.name);
-
+      const headers = initialSchema.map(f => f.source_column_name);
       setCsvHeaders(headers);
-
-      // Rebuild mappings
-      const initialMappings = new Map<string, SchemaField>();
-      const initialDerived = new Map<string, SchemaField>();
-
-      initialSchema.forEach(field => {
-        if (field.formula) {
-          initialDerived.set(field.name, field);
-        } else {
-          const columnName = field.source_column_name || field.name;
-          initialMappings.set(columnName, field);
-        }
-      });
-
-      setMappings(initialMappings);
-      setDerivedFields(initialDerived);
-
-      console.log(`✏️ Edit Mode: Hydrated ${initialMappings.size} fields + ${initialDerived.size} formulas`);
+      setSchemaFields(initialSchema);
     }
   }, [initialSchema]);
-
-  // Determine anchor catalog based on entity type
-  const getAnchorCatalog = (): AnchorDefinition[] => {
-    switch (entityType.toUpperCase()) {
-      case 'PRODUCT': return PRODUCT_ANCHORS;
-      case 'TRANSACTION': return TRANSACTION_ANCHORS;
-      case 'INVENTORY': return INVENTORY_ANCHORS;
-      default: return []; // Custom entity - no predefined anchors
-    }
-  };
-
-  const anchorCatalog = getAnchorCatalog();
-  const isCustomEntity = anchorCatalog.length === 0;
-
-  // Generate custom anchor from column name
-  const generateCustomAnchor = (columnName: string): string => {
-    return `ANCHOR_${columnName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-  };
-
-  const loadUserPreferences = (): Record<string, string> => {
-    try {
-      const prefs = localStorage.getItem(`auctorian_mapping_${entityType.toLowerCase()}`);
-      return prefs ? JSON.parse(prefs) : {};
-    } catch {
-      return {};
-    }
-  };
-
-  const saveUserPreferences = (header: string, anchor: string) => {
-    try {
-      const prefs = loadUserPreferences();
-      prefs[header.toLowerCase()] = anchor;
-      localStorage.setItem(`auctorian_mapping_${entityType.toLowerCase()}`, JSON.stringify(prefs));
-    } catch (e) {
-      console.warn('Failed to save preferences', e);
-    }
-  };
-
-  const autoDetect = (header: string): { anchor?: string; family: ConstitutionalFamily } | null => {
-    const h = header.toLowerCase();
-
-    // Check user preferences first
-    const userPrefs = loadUserPreferences();
-    if (userPrefs[h]) {
-      const anchor = anchorCatalog.find(a => a.anchor === userPrefs[h]);
-      if (anchor) return { anchor: anchor.anchor, family: anchor.family };
-    }
-
-    // For custom entities, generate anchor and default to INTRINSIC
-    if (isCustomEntity) {
-      return { anchor: generateCustomAnchor(header), family: ConstitutionalFamily.INTRINSIC };
-    }
-
-    // Core entity auto-detection
-    if (h.includes('sku') || h.includes('product_id') || h.includes('id')) {
-      const match = anchorCatalog.find(a => a.anchor.includes('PRODUCT_ID') || a.anchor.includes('_ID'));
-      return match ? { anchor: match.anchor, family: match.family } : null;
-    }
-    if (h.includes('name') || h.includes('title')) {
-      const match = anchorCatalog.find(a => a.anchor.includes('NAME'));
-      return match ? { anchor: match.anchor, family: match.family } : null;
-    }
-    if (h.includes('price') || h.includes('msrp') || h.includes('retail')) {
-      const match = anchorCatalog.find(a => a.anchor.includes('PRICE'));
-      return match ? { anchor: match.anchor, family: match.family } : null;
-    }
-    if (h.includes('qty') || h.includes('quantity') || h.includes('units')) {
-      const match = anchorCatalog.find(a => a.anchor.includes('QTY') || a.anchor.includes('STOCK'));
-      return match ? { anchor: match.anchor, family: match.family } : null;
-    }
-    if (h.includes('date') || h.includes('time')) {
-      const match = anchorCatalog.find(a => a.anchor.includes('DATE'));
-      return match ? { anchor: match.anchor, family: match.family } : null;
-    }
-
-    return { family: ConstitutionalFamily.INTRINSIC };
-  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
       setFile(selectedFile);
-      parseHeaders(selectedFile);
+      parseCSV(selectedFile);
     }
   };
 
-  const parseHeaders = (file: File) => {
+  const parseCSV = (file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
@@ -197,115 +95,88 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
       );
       setCsvData(dataRows);
 
-      // SMART MERGE: Preserve existing mappings if column name matches
-      const mergedMappings = new Map<string, SchemaField>();
+      // Auto-populate schema fields with smart defaults
+      const autoFields: SchemaField[] = headers.map((header, idx) => {
+        const sampleData = dataRows.map(row => row[idx]).filter(Boolean);
+        const detectedType = detectDatatype(sampleData);
 
-      headers.forEach((header) => {
-        // If we already have a mapping for this header (from initialSchema or previous work), keep it.
-        if (mappings.has(header)) {
-          mergedMappings.set(header, mappings.get(header)!);
-        } else {
-          // New column -> Auto-detect
-          const detection = autoDetect(header);
-          if (detection) {
-            mergedMappings.set(header, {
-              name: header,
-              generic_anchor: detection.anchor,
-              family_type: detection.family,
-              is_attribute: true,
-              is_hierarchy: header.toLowerCase().includes('category') || header.toLowerCase().includes('dept'),
-              hierarchy_level: header.toLowerCase().includes('category') ? 1 : undefined
-            });
-          }
-        }
+        // Smart defaults
+        const isId = header.toLowerCase().includes('id');
+        const isDate = header.toLowerCase().includes('date') || detectedType === 'date';
+        const isCategory = header.toLowerCase().includes('category');
+        const isDepartment = header.toLowerCase().includes('department') || header.toLowerCase().includes('dept');
+        const isDivision = header.toLowerCase().includes('division') || header.toLowerCase().includes('div');
+
+        return {
+          source_column_name: header,
+          source_column_datatype: detectedType,
+          generic_column_name: '', // User must map
+          generic_column_datatype: detectedType,
+          display_name: header,
+          is_pk: isId,
+          is_hierarchy: isCategory || isDepartment || isDivision,
+          hierarchy_level: isCategory ? 3 : isDepartment ? 2 : isDivision ? 1 : undefined,
+          is_attribute: !isId && !isDate,
+          is_partition_col: isDate,
+          is_clustering_col: isId,
+          is_null_allowed: true,
+          required_in_product: isId,
+        };
       });
-      setMappings(mergedMappings);
+
+      setSchemaFields(autoFields);
     };
     reader.readAsText(file.slice(0, 10000));
   };
 
-  const updateMapping = (csvHeader: string, anchorKey: string, familyType?: ConstitutionalFamily) => {
-    const updated = new Map(mappings);
+  const updateField = (index: number, updates: Partial<SchemaField>) => {
+    const updated = [...schemaFields];
+    updated[index] = { ...updated[index], ...updates };
+    setSchemaFields(updated);
+  };
 
-    if (anchorKey === 'SKIP') {
-      updated.delete(csvHeader);
-    } else {
-      const anchor = anchorCatalog.find(a => a.anchor === anchorKey);
-      // For custom entities or if anchor not found, use the provided values
-      updated.set(csvHeader, {
-        name: csvHeader,
-        generic_anchor: anchorKey,
-        family_type: familyType || anchor?.family || ConstitutionalFamily.INTRINSIC,
-        is_attribute: true
-      });
+  const validateSchema = (): { valid: boolean; errors: string[] } => {
+    const errors: string[] = [];
 
-      if (anchor || isCustomEntity) {
-        saveUserPreferences(csvHeader, anchorKey);
+    // Check for PK
+    const hasPK = schemaFields.some(f => f.is_pk);
+    if (!hasPK) errors.push('No Primary Key (is_pk) defined');
+
+    // Check hierarchy levels are sequential
+    const hierarchyFields = schemaFields.filter(f => f.is_hierarchy).sort((a, b) => (a.hierarchy_level || 0) - (b.hierarchy_level || 0));
+    const levels = hierarchyFields.map(f => f.hierarchy_level).filter(Boolean);
+    for (let i = 0; i < levels.length; i++) {
+      if (levels[i] !== i + 1) {
+        errors.push(`Hierarchy Level ${i + 1} is missing (cannot have Level ${levels[i]} without Level ${i + 1})`);
+        break;
       }
     }
-    setMappings(updated);
-  };
 
-  const validateSchema = (): { valid: boolean; missing: string[] } => {
-    const mandatory = anchorCatalog.filter(a => a.mandatory).map(a => a.anchor);
-    const mapped = Array.from(mappings.values()).map(m => m.generic_anchor).filter(Boolean);
-    const missing = mandatory.filter(m => !mapped.includes(m));
-
-    // Custom entities don't have mandatory fields
-    if (isCustomEntity && mappings.size > 0) {
-      return { valid: true, missing: [] };
+    // Check required fields are mapped
+    const requiredCols = standardSchema.filter(s => s.required).map(s => s.column);
+    const mappedGenericCols = schemaFields.map(f => f.generic_column_name).filter(Boolean);
+    const missingRequired = requiredCols.filter(col => !mappedGenericCols.includes(col));
+    if (missingRequired.length > 0) {
+      errors.push(`Required fields not mapped: ${missingRequired.join(', ')}`);
     }
 
-    return { valid: missing.length === 0, missing };
-  };
-
-  const getUnlockedCapabilities = (): string[] => {
-    const mapped = Array.from(mappings.values()).map(m => m.generic_anchor).filter(Boolean);
-    return anchorCatalog.filter(a => a.unlocks && mapped.includes(a.anchor)).map(a => a.unlocks!);
-  };
-
-  const handleOpenFormulaBuilder = () => {
-    const fieldName = `CALCULATED_FIELD_${derivedFields.size + 1}`;
-    setCurrentFormulaField(fieldName);
-    setIsFormulaModalOpen(true);
-  };
-
-  const handleFormulaSave = (formula: string) => {
-    const derivedField: SchemaField = {
-      name: currentFormulaField,
-      generic_anchor: `ANCHOR_${currentFormulaField}`,
-      family_type: ConstitutionalFamily.PERFORMANCE, // Default to performance for calculations
-      is_attribute: true,
-      formula: formula
-    };
-
-    const updated = new Map(derivedFields);
-    updated.set(currentFormulaField, derivedField);
-    setDerivedFields(updated);
-  };
-
-  const handleRemoveDerivedField = (fieldName: string) => {
-    const updated = new Map(derivedFields);
-    updated.delete(fieldName);
-    setDerivedFields(updated);
+    return { valid: errors.length === 0, errors };
   };
 
   const handleSubmit = async () => {
-    if (!hasActiveContext) return;
+    if (!file && !initialSchema) return;
     setIsSubmitting(true);
     setError(null);
 
     const validation = validateSchema();
     if (!validation.valid) {
-      setError(`❌ CONSTITUTIONAL VIOLATION: Missing ${validation.missing.map(m => m.replace('ANCHOR_', '')).join(', ')}`);
+      setError(validation.errors.join('; '));
       setIsSubmitting(false);
       return;
     }
 
     try {
-      // Combine base mappings and derived fields
-      const allFields = [...Array.from(mappings.values()), ...Array.from(derivedFields.values())];
-      onComplete({ entityType, fields: allFields });
+      onComplete({ entityType, fields: schemaFields });
     } catch (err: any) {
       setError(err.message || "Schema Registration Failed");
     } finally {
@@ -313,34 +184,15 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
     }
   };
 
-  const reset = () => {
-    setFile(null);
-    setCsvHeaders([]);
-    setMappings(new Map());
-    setError(null);
-  };
-
-  const validation = validateSchema();
-  const unlockedCapabilities = getUnlockedCapabilities();
-  const completeness = isCustomEntity
-    ? (mappings.size > 0 ? 100 : 0)
-    : Math.round((Array.from(mappings.values()).filter(m => m.generic_anchor).length / anchorCatalog.filter(a => a.mandatory).length) * 100);
-
-  // CONTEXT-AWARE STATE: Do we have a file OR an existing schema?
   const hasActiveContext = !!file || (csvHeaders.length > 0 && !!initialSchema);
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col p-6">
       <div className="mb-6">
         <h4 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-          <Sparkles className="text-indigo-500" /> {title}
+          <Settings className="text-indigo-500" /> {title}
         </h4>
         <p className="text-sm text-slate-500">{description}</p>
-        {isCustomEntity && (
-          <div className="mt-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-            <strong>Custom Entity Mode:</strong> No predefined anchors. Anchors will be auto-generated from your column names.
-          </div>
-        )}
       </div>
 
       {error && (
@@ -349,7 +201,7 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
         </div>
       )}
 
-      {/* 1. UPLOAD STATE: Only show if no context exists */}
+      {/* FILE UPLOAD */}
       {!hasActiveContext && (
         <div
           onClick={() => fileInputRef.current?.click()}
@@ -359,15 +211,15 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
             <Upload size={40} />
           </div>
           <p className="font-bold text-slate-700 text-lg">Upload {entityType} Data</p>
-          <p className="text-xs text-slate-400 mt-1">CSV only • Constitutional Mapping Required</p>
+          <p className="text-xs text-slate-400 mt-1">CSV only • Generic Schema Mapping Required</p>
           <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileChange} />
         </div>
       )}
 
-      {/* 2. EDITOR STATE: Show if context exists (File OR Schema) */}
+      {/* METADATA TABLE */}
       {hasActiveContext && (
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* CONTROL BAR */}
+          {/* Control Bar */}
           <div className="flex justify-between items-center p-4 bg-slate-50 border border-slate-200 rounded-lg mb-4 shrink-0">
             <div className="flex items-center gap-3">
               <FileText className="text-indigo-600" size={20} />
@@ -376,169 +228,120 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
                   {file ? file.name : `Existing Schema: ${entityType}`}
                 </div>
                 <div className="text-xs text-slate-500">
-                  {csvHeaders.length} columns • {file ? 'New Upload' : 'Database Version'}
+                  {csvHeaders.length} columns • Mapping to {standardSchema.length} standard fields
                 </div>
               </div>
             </div>
-
             <div className="flex gap-2">
               <input type="file" ref={fileInputRef} className="hidden" accept=".csv" onChange={handleFileChange} />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="px-3 py-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md border border-indigo-200 transition-colors"
+                className="px-3 py-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-md border border-indigo-200"
               >
-                {file ? 'Change File' : 'Replace Source File'}
-              </button>
-              <button onClick={reset} className="text-slate-400 hover:text-red-500 p-1">
-                <X size={18} />
+                {file ? 'Change File' : 'Replace Source'}
               </button>
             </div>
           </div>
 
-          {/* PROMINENT FORMULA BUTTON */}
-          <button
-            onClick={handleOpenFormulaBuilder}
-            className="mb-6 w-full py-3 bg-gradient-to-r from-violet-600/10 to-fuchsia-600/10 hover:from-violet-600/20 hover:to-fuchsia-600/20 border border-violet-200 text-violet-700 font-bold rounded-xl flex items-center justify-center gap-2 transition-all group shrink-0"
-          >
-            <Sparkles size={16} className="group-hover:animate-pulse" />
-            <span>✨ Create Synthetic Feature (Formula)</span>
-            <Plus size={16} className="opacity-50" />
-          </button>
-
-          {/* STATUS CARD */}
-          <div className="mb-6 p-4 bg-white rounded-lg border border-slate-200 shrink-0">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-xs font-bold text-slate-600">Constitution Completeness</span>
-              <span className="text-xs font-bold text-indigo-600">{completeness}%</span>
-            </div>
-            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-indigo-500 to-purple-600 transition-all duration-500"
-                style={{ width: `${completeness}%` }}
-              />
-            </div>
-
-            {unlockedCapabilities.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {unlockedCapabilities.map(cap => (
-                  <span key={cap} className="px-2 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-full border border-emerald-200 flex items-center gap-1">
-                    <Sparkles size={12} /> UNLOCKED: {cap}
-                  </span>
+          {/* THE METADATA TABLE */}
+          <div className="flex-1 overflow-auto border border-slate-200 rounded-lg">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-100 sticky top-0">
+                <tr>
+                  <th className="p-3 text-left font-bold text-slate-700 border-b">Source Column</th>
+                  <th className="p-3 text-left font-bold text-slate-700 border-b">Generic Target</th>
+                  <th className="p-3 text-center font-bold text-slate-700 border-b">Type</th>
+                  <th className="p-3 text-center font-bold text-slate-700 border-b">PK</th>
+                  <th className="p-3 text-center font-bold text-slate-700 border-b">Hierarchy</th>
+                  <th className="p-3 text-center font-bold text-slate-700 border-b">Level</th>
+                  <th className="p-3 text-center font-bold text-slate-700 border-b">Partition</th>
+                  <th className="p-3 text-center font-bold text-slate-700 border-b">Nullable</th>
+                </tr>
+              </thead>
+              <tbody>
+                {schemaFields.map((field, idx) => (
+                  <tr key={idx} className="border-b hover:bg-slate-50">
+                    <td className="p-3 font-mono text-xs">{field.source_column_name}</td>
+                    <td className="p-3">
+                      <select
+                        value={field.generic_column_name}
+                        onChange={(e) => updateField(idx, { generic_column_name: e.target.value })}
+                        className="w-full text-xs border rounded p-1.5"
+                      >
+                        <option value="">-- Select Target --</option>
+                        {standardSchema.map(s => (
+                          <option key={s.column} value={s.column}>
+                            {s.display} {s.required && '*'}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="p-3 text-center text-xs text-slate-500">{field.source_column_datatype}</td>
+                    <td className="p-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={field.is_pk}
+                        onChange={(e) => updateField(idx, { is_pk: e.target.checked })}
+                        className="w-4 h-4"
+                      />
+                    </td>
+                    <td className="p-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={field.is_hierarchy}
+                        onChange={(e) => updateField(idx, { is_hierarchy: e.target.checked })}
+                        className="w-4 h-4"
+                      />
+                    </td>
+                    <td className="p-3 text-center">
+                      <input
+                        type="number"
+                        min="1"
+                        max="5"
+                        value={field.hierarchy_level || ''}
+                        onChange={(e) => updateField(idx, { hierarchy_level: e.target.value ? parseInt(e.target.value) : undefined })}
+                        disabled={!field.is_hierarchy}
+                        className="w-12 text-xs border rounded p-1 text-center disabled:bg-slate-100"
+                      />
+                    </td>
+                    <td className="p-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={field.is_partition_col}
+                        onChange={(e) => updateField(idx, { is_partition_col: e.target.checked })}
+                        className="w-4 h-4"
+                      />
+                    </td>
+                    <td className="p-3 text-center">
+                      <input
+                        type="checkbox"
+                        checked={field.is_null_allowed}
+                        onChange={(e) => updateField(idx, { is_null_allowed: e.target.checked })}
+                        className="w-4 h-4"
+                      />
+                    </td>
+                  </tr>
                 ))}
-              </div>
-            )}
-
-            {isCustomEntity && mappings.size > 0 && (
-              <div className="mt-3">
-                <span className="px-2 py-1 bg-amber-50 text-amber-700 text-xs font-bold rounded-full border border-amber-200">
-                  Auxiliary Context Added ({mappings.size} fields)
-                </span>
-              </div>
-            )}
+              </tbody>
+            </table>
           </div>
 
-          <div className="flex-1 overflow-y-auto pr-2 space-y-6">
-            {Object.values(ConstitutionalFamily).map(family => {
-              const familyMappings = Array.from(mappings.entries()).filter(([_, m]) => m.family_type === family);
-              if (familyMappings.length === 0) return null;
-
-              const FamilyIcon = FAMILY_ICONS[family];
-              const colors = FAMILY_COLORS[family];
-
-              return (
-                <div key={family} className={`p-4 rounded-lg border ${colors.border} ${colors.bg}`}>
-                  <div className="flex items-center gap-2 mb-4">
-                    <FamilyIcon size={18} className={colors.text} />
-                    <h5 className={`text-sm font-bold ${colors.text} uppercase tracking-wide`}>{family}</h5>
-                  </div>
-
-                  <div className="space-y-3">
-                    {familyMappings.map(([header, mapping], idx) => {
-                      const headerIdx = csvHeaders.indexOf(header);
-                      const sampleData = csvData.map(row => row[headerIdx]).filter(Boolean);
-
-                      return (
-                        <div key={header} className="space-y-2">
-                          <div className="grid grid-cols-2 gap-3 items-center">
-                            <label className="text-sm font-medium text-slate-700">{header}</label>
-                            {isCustomEntity ? (
-                              <div className="text-sm bg-white border border-slate-300 rounded-lg p-2 font-mono text-slate-600">
-                                {mapping.generic_anchor}
-                              </div>
-                            ) : (
-                              <select
-                                className="text-sm border rounded-lg p-2 bg-white border-slate-300"
-                                value={mapping.generic_anchor || ''}
-                                onChange={(e) => updateMapping(header, e.target.value)}
-                              >
-                                <option value="">-- Select Anchor --</option>
-                                {anchorCatalog.filter(a => a.family === family).map(a => (
-                                  <option key={a.anchor} value={a.anchor}>
-                                    {a.label} {a.mandatory ? '*' : ''}
-                                  </option>
-                                ))}
-                                <option value="SKIP">(Skip Column)</option>
-                              </select>
-                            )}
-                          </div>
-
-                          {sampleData.length > 0 && (
-                            <div className="ml-0 pl-4 border-l-2 border-slate-200">
-                              <div className="text-xs text-slate-500 font-medium mb-1">Sample Data:</div>
-                              <div className="flex flex-wrap gap-1">
-                                {sampleData.slice(0, 3).map((val, idx) => (
-                                  <span key={idx} className="px-2 py-0.5 bg-slate-100 text-slate-600 text-xs rounded font-mono">
-                                    {val.length > 20 ? val.substring(0, 20) + '...' : val}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
+          {/* SUBMIT */}
           <div className="pt-6 mt-4 border-t border-slate-200 shrink-0">
             <button
               onClick={handleSubmit}
-              disabled={!validation.valid || isSubmitting}
-              className={`w-full font-bold py-4 rounded-xl transition-all flex justify-center items-center gap-2 ${validation.valid
-                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-lg'
-                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                }`}
+              disabled={isSubmitting}
+              className="w-full font-bold py-4 rounded-xl transition-all flex justify-center items-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:shadow-lg"
             >
-              {isSubmitting ? (
-                <span>Registering Schema...</span>
-              ) : validation.valid ? (
+              {isSubmitting ? 'Registering Schema...' : (
                 <>
                   <Lock size={18} />
                   <span>Register {entityType} Schema</span>
-                  <ArrowRight size={18} />
-                </>
-              ) : (
-                <>
-                  <AlertCircle size={18} />
-                  <span>Constitution Invalid ({validation.missing.length} missing)</span>
                 </>
               )}
             </button>
           </div>
         </div>
-      )}
-
-      {/* Formula Builder Modal */}
-      {isFormulaModalOpen && (
-        <FormulaBuilderModal
-          isOpen={isFormulaModalOpen}
-          onClose={() => setIsFormulaModalOpen(false)}
-          onSave={handleFormulaSave}
-          availableFields={Array.from(mappings.keys())}
-        />
       )}
     </div>
   );

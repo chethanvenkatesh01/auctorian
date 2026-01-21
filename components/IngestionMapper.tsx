@@ -291,7 +291,7 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
   };
 
   const handleSubmit = async () => {
-    if (!file) return;
+    if (!hasActiveContext) return;
     setIsSubmitting(true);
     setError(null);
 
@@ -529,6 +529,16 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
             </button>
           </div>
         </div>
+      )}
+
+      {/* Formula Builder Modal */}
+      {isFormulaModalOpen && (
+        <FormulaBuilderModal
+          isOpen={isFormulaModalOpen}
+          onClose={() => setIsFormulaModalOpen(false)}
+          onSave={handleFormulaSave}
+          availableFields={Array.from(mappings.keys())}
+        />
       )}
     </div>
   );

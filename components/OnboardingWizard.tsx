@@ -174,3 +174,5 @@ export const OnboardingWizard: React.FC = () => {
         </div>
     );
 };
+
+export default OnboardingWizard;

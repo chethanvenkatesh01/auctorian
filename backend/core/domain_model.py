@@ -125,9 +125,15 @@ class DomainManager:
                         VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                     """
                     data = [(
-                        entity_type, r['name'], r.get('generic_anchor'), r.get('family_type', 'INTRINSIC'),
-                        r.get('is_pk', False), r.get('is_attribute', True), r.get('is_hierarchy', False),
-                        r.get('hierarchy_level'), r.get('formula')
+                        entity_type, 
+                        r.get('source_column_name') or r.get('name'),  # Support both new and old format
+                        r.get('generic_column_name') or r.get('generic_anchor'),  # Support both new and old
+                        r.get('family_type', 'INTRINSIC'),
+                        r.get('is_pk', False), 
+                        r.get('is_attribute', True), 
+                        r.get('is_hierarchy', False),
+                        r.get('hierarchy_level'), 
+                        r.get('formula')
                     ) for r in rows]
                     
                     from psycopg2.extras import execute_batch
@@ -141,9 +147,15 @@ class DomainManager:
                         VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                     """
                  data = [(
-                        entity_type, r['name'], r.get('generic_anchor'), r.get('family_type', 'INTRINSIC'),
-                        r.get('is_pk', False), r.get('is_attribute', True), r.get('is_hierarchy', False),
-                        r.get('hierarchy_level'), r.get('formula')
+                        entity_type, 
+                        r.get('source_column_name') or r.get('name'),  # Support both new and old format
+                        r.get('generic_column_name') or r.get('generic_anchor'),  # Support both new and old
+                        r.get('family_type', 'INTRINSIC'),
+                        r.get('is_pk', False), 
+                        r.get('is_attribute', True), 
+                        r.get('is_hierarchy', False),
+                        r.get('hierarchy_level'), 
+                        r.get('formula')
                     ) for r in rows]
                  conn.executemany(insert_query, data)
                  conn.commit()

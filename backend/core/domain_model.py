@@ -98,11 +98,14 @@ class DomainManager:
             logger.warning(f"⚠️ Registering unknown entity type {entity_type} without Constitutional checks.")
         else:
             required = set(standards['mandatory_mappings'])
-            # Extract anchors provided in the rows
+            
+            # [FIX APPLIED] Check BOTH keys to support new frontend payload
             provided_anchors = set()
             for r in rows:
-                if r.get('generic_anchor'):
-                    provided_anchors.add(r['generic_anchor'])
+                # Look for 'generic_anchor' (Legacy) OR 'generic_column_name' (New Standard)
+                anchor = r.get('generic_anchor') or r.get('generic_column_name')
+                if anchor:
+                    provided_anchors.add(anchor)
             
             missing = required - provided_anchors
             if missing:

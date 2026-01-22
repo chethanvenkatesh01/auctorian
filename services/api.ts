@@ -378,7 +378,22 @@ export const api = {
   },
 
   // =========================================================
-  // 7. WORKSPACE HELPERS
+  // 7. DATA INGESTION
+  // =========================================================
+
+  ingest: {
+    uploadUniversal: async (file: File, config: any) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('config', JSON.stringify(config));
+
+      const res = await uploadClient.post('/ingest/universal', formData);
+      return res.data;
+    }
+  },
+
+  // =========================================================
+  // 8. WORKSPACE HELPERS
   // =========================================================
 
   async initPlanningWorkspace(scope: PlanningScope): Promise<string> {

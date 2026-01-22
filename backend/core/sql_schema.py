@@ -200,6 +200,22 @@ COMMON_INIT = [
         PRIMARY KEY (node_id, lag_bucket)
     )
     """,
+    # Debate: Conflict Resolution Tickets
+    """
+    CREATE TABLE IF NOT EXISTS debate_tickets (
+        ticket_id TEXT PRIMARY KEY,
+        node_id TEXT NOT NULL,
+        issue_type TEXT NOT NULL,
+        value REAL,
+        threshold REAL,
+        reason TEXT,
+        status TEXT DEFAULT 'ACTIVE',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        resolved_at TIMESTAMP,
+        resolution_verdict TEXT,
+        pkg_id TEXT
+    )
+    """,
     # Planning: Human Overrides
     """
     CREATE TABLE IF NOT EXISTS plan_overrides (

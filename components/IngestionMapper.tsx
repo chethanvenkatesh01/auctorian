@@ -175,7 +175,17 @@ export const IngestionMapper: React.FC<IngestionMapperProps> = ({ title, descrip
     }
 
     try {
-      onComplete({ entityType, fields: schemaFields });
+      // [FIX] Pass the FILE and the MAPPING (Config)
+      onComplete({
+        entityType,
+        fields: schemaFields,
+        file: file, // <--- CRITICAL ADDITION: Pass the actual file for data upload
+        mapping: schemaFields.reduce((acc, f) => {
+          // Create the mapping dict { SourceCol: TargetCol }
+          if (f.generic_column_name) acc[f.source_column_name] = f.generic_column_name;
+          return acc;
+        }, {} as Record<string, string>)
+      });
     } catch (err: any) {
       setError(err.message || "Schema Registration Failed");
     } finally {

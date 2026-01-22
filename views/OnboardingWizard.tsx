@@ -84,9 +84,17 @@ export const OnboardingWizard: React.FC = () => {
 
     const handleFinalize = async () => {
         if (!registeredSchemas['PRODUCT']) return alert("Product Master is required.");
-        await api.ontology.lockSystem();
-        // Force full reload to trigger App.tsx lock check
-        window.location.reload();
+
+        try {
+            console.log("🔒 Initiating System Lock...");
+            await api.ontology.lockSystem();
+            console.log("✅ Lock Successful. Rebooting...");
+            // Force full reload to trigger App.tsx lock check
+            window.location.reload();
+        } catch (e: any) {
+            console.error("❌ Lock Failed:", e);
+            alert(`Initialization Failed: ${e.response?.data?.detail || e.message || 'Unknown error'}`);
+        }
     };
 
     // RENDER: CARTRIDGE SELECT

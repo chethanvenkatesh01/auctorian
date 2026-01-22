@@ -1,15 +1,20 @@
 import os
 import json
+import uuid
+from datetime import datetime
 import google.generativeai as genai
-from typing import Dict, Any
+from typing import Dict, Any, List
+from .sql_schema import get_db_connection, get_placeholder, POSTGRES_AVAILABLE
 
 class DebateEngine:
     """
     System 3: The Multi-Modal Council of Agents.
     Simulates domain-specific boardroom debates for ambiguous decisions.
+    Now with persistent ticket storage for conflict resolution.
     """
     
-    def __init__(self):
+    def __init__(self, db_path="ados_ledger.db"):
+        self.db_path = db_path
         self.api_key = os.environ.get("GEMINI_API_KEY")
         self.model = None
         if self.api_key:
@@ -124,5 +129,159 @@ class DebateEngine:
             return self.model.generate_content(prompt).text.strip()
         except:
             return "..."
+
+    # =========================================================
+    # TICKET PERSISTENCE SYSTEM
+    # =========================================================
+    
+    def create_ticket(self, node_id: str, issue_type: str, value: float, threshold: float, reason: str) -> Dict:
+        """
+        Creates a persistent conflict ticket in the database.
+        Called when validator rejects a decision.
+        """
+        ticket_id = f"TKT-{uuid.uuid4().hex[:8].upper()}"
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder()
+        
+        try:
+            query = f"""
+                INSERT INTO debate_tickets 
+                (ticket_id, node_id, issue_type, value, threshold, reason, status, created_at)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+            """
+            params = (
+                ticket_id, node_id, issue_type, value, threshold, reason, 
+                'ACTIVE', datetime.now().isoformat()
+            )
+            
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                conn.commit()
+            else:
+                conn.execute(query, params)
+                conn.commit()
+            
+            print(f"[DEBATE] 🎫 Ticket Created: {ticket_id} - {issue_type} for {node_id}")
+            return {"ticket_id": ticket_id, "status": "created"}
+            
+        except Exception as e:
+            print(f"[DEBATE] ❌ Failed to create ticket: {e}")
+            return {"error": str(e)}
+        finally:
+            conn.close()
+    
+    def get_active_tickets(self) -> List[Dict]:
+        """
+        Returns all active (unresolved) conflict tickets.
+        """
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder()
+        
+        try:
+            query = f"SELECT * FROM debate_tickets WHERE status = {ph} ORDER BY created_at DESC"
+            
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(query, ('ACTIVE',))
+                    rows = cur.fetchall()
+                    return [dict(r) for r in rows]
+            else:
+                rows = conn.execute(query, ('ACTIVE',)).fetchall()
+                return [dict(r) for r in rows]
+                
+        except Exception as e:
+            print(f"[DEBATE] ❌ Failed to fetch tickets: {e}")
+            return []
+        finally:
+            conn.close()
+    
+    def resolve_ticket(self, ticket_id: str, approved: bool) -> Dict:
+        """
+        Resolves a conflict ticket.
+        If approved, forwards decision to Auctobot via DecisionPackage.
+        """
+        conn = get_db_connection(self.db_path)
+        ph = get_placeholder()
+        
+        try:
+            # 1. Fetch ticket details
+            query = f"SELECT * FROM debate_tickets WHERE ticket_id = {ph}"
+            
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                from psycopg2.extras import RealDictCursor
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(query, (ticket_id,))
+                    ticket = cur.fetchone()
+            else:
+                ticket = conn.execute(query, (ticket_id,)).fetchone()
+            
+            if not ticket:
+                return {"error": "Ticket not found"}
+            
+            ticket_dict = dict(ticket)
+            verdict = "APPROVED" if approved else "REJECTED"
+            pkg_id = None
+            
+            # 2. If approved, create DecisionPackage and queue to Auctobot
+            if approved:
+                try:
+                    from .agency import auctobot, DecisionPackage
+                    
+                    # Map issue_type to action
+                    action_map = {
+                        "REPLENISHMENT": "REPLENISH",
+                        "PRICING": "PRICE_CHANGE",
+                        "PROFIT_GUARD": "REPLENISH"  # Fallback
+                    }
+                    action = action_map.get(ticket_dict['issue_type'], "REPLENISH")
+                    
+                    pkg = DecisionPackage(
+                        action=action,
+                        target_id=ticket_dict['node_id'],
+                        quantity=ticket_dict['value'],
+                        reason=f"DEBATE APPROVED: {ticket_dict['reason']}"
+                    )
+                    
+                    auctobot.queue_decision(pkg)
+                    pkg_id = pkg.id
+                    print(f"[DEBATE] ✅ Approved: {ticket_id} → Queued as {pkg_id}")
+                    
+                except Exception as e:
+                    print(f"[DEBATE] ⚠️ Could not queue to Auctobot: {e}")
+            else:
+                print(f"[DEBATE] ❌ Rejected: {ticket_id}")
+            
+            # 3. Update ticket status
+            update_query = f"""
+                UPDATE debate_tickets 
+                SET status = {ph}, resolved_at = {ph}, resolution_verdict = {ph}, pkg_id = {ph}
+                WHERE ticket_id = {ph}
+            """
+            update_params = (
+                'RESOLVED', datetime.now().isoformat(), verdict, pkg_id, ticket_id
+            )
+            
+            if POSTGRES_AVAILABLE and hasattr(conn, 'cursor'):
+                with conn.cursor() as cur:
+                    cur.execute(update_query, update_params)
+                conn.commit()
+            else:
+                conn.execute(update_query, update_params)
+                conn.commit()
+            
+            return {
+                "ticket_id": ticket_id,
+                "verdict": verdict,
+                "pkg_id": pkg_id,
+                "status": "resolved"
+            }
+            
+        except Exception as e:
+            print(f"[DEBATE] ❌ Failed to resolve ticket: {e}")
+            return {"error": str(e)}
+        finally:
+            conn.close()
 
 debate_engine = DebateEngine()

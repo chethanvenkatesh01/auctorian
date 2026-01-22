@@ -1,40 +1,46 @@
-
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Terminal, CheckCircle, Circle, AlertTriangle, Play, RefreshCw, Server, Shield } from 'lucide-react';
-import { AuctobotLog, Plane } from '../types';
+import { X, Terminal, CheckCircle, Circle, AlertTriangle, Play, RefreshCw, Server, Shield, Package, Clock } from 'lucide-react';
+import { api } from '../services/api';
 
 interface AuctobotConsoleProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const MOCK_LOGS: AuctobotLog[] = [
-  { id: '1', timestamp: '03:00:00', plane: Plane.DATA, action: 'Triggered Weekly Cycle (Cron: 0 3 * * MON)', status: 'success' },
-  { id: '2', timestamp: '03:00:05', plane: Plane.DATA, action: 'Ingesting Sales Data (Snowflake)', status: 'success', details: '14k rows ingested, 0 errors' },
-  { id: '3', timestamp: '03:00:12', plane: Plane.DATA, action: 'Running GreatExpectations Suite', status: 'success', details: 'All contracts passed' },
-  { id: '4', timestamp: '03:01:45', plane: Plane.INTELLIGENCE, action: 'Retraining Demand Model v3.4', status: 'success', details: 'Accuracy improved by 0.4%' },
-  // Changed Plane.DECISION to Plane.ORCHESTRATION
-  { id: '5', timestamp: '03:05:20', plane: Plane.ORCHESTRATION, action: 'Generating Decision Package', status: 'success', details: 'Optimized pricing for 1,200 SKUs' },
-  { id: '6', timestamp: '03:05:25', plane: Plane.GOVERNANCE, action: 'Checking Guardrails (OPA)', status: 'warning', details: '3 SKUs hit Max Price Cap' },
-  { id: '7', timestamp: '03:05:30', plane: Plane.GOVERNANCE, action: 'Calculating DQS', status: 'success', details: 'Score: 92.4 (Auto-Approval Threshold: 90)' },
-  // Changed Plane.DECISION to Plane.ORCHESTRATION
-  { id: '8', timestamp: '03:06:00', plane: Plane.ORCHESTRATION, action: 'Executing Actions via ERP API', status: 'running', details: 'Pushing updates...' },
-];
+interface DecisionPackage {
+  id: string;
+  timestamp: string;
+  action: string;
+  target_id: string;
+  quantity: number;
+  reason: string;
+  status: string;
+  hash: string;
+}
 
 const AuctobotConsole: React.FC<AuctobotConsoleProps> = ({ isOpen, onClose }) => {
-  const [logs, setLogs] = useState<AuctobotLog[]>([]);
+  const [queue, setQueue] = useState<DecisionPackage[]>([]);
+  const [history, setHistory] = useState<DecisionPackage[]>([]);
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  const fetchQueueData = async () => {
+    try {
+      const data = await api.agency.getQueue();
+      setQueue(data.queue || []);
+      setHistory(data.history || []);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch queue data');
+    }
+  };
+
   useEffect(() => {
-    if (isOpen && logs.length === 0) {
-      // Replay logs for effect
-      let delay = 0;
-      MOCK_LOGS.forEach((log, index) => {
-        delay += index === 0 ? 0 : 800;
-        setTimeout(() => {
-          setLogs(prev => [...prev, log]);
-        }, delay);
-      });
+    if (isOpen) {
+      fetchQueueData();
+      const interval = setInterval(fetchQueueData, 5000); // Poll every 5s
+      return () => clearInterval(interval);
     }
   }, [isOpen]);
 
@@ -42,13 +48,27 @@ const AuctobotConsole: React.FC<AuctobotConsoleProps> = ({ isOpen, onClose }) =>
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [logs]);
+  }, [history]);
+
+  const handleExecute = async () => {
+    if (queue.length === 0) return;
+
+    setIsExecuting(true);
+    try {
+      await api.agency.execute();
+      await fetchQueueData(); // Refresh after execution
+    } catch (err: any) {
+      setError(err.message || 'Execution failed');
+    } finally {
+      setIsExecuting(false);
+    }
+  };
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-slate-900 w-full max-w-4xl rounded-xl shadow-2xl border border-slate-700 overflow-hidden flex flex-col max-h-[80vh]">
+      <div className="bg-slate-900 w-full max-w-5xl rounded-xl shadow-2xl border border-slate-700 overflow-hidden flex flex-col max-h-[85vh]">
         {/* Header */}
         <div className="bg-slate-950 p-4 border-b border-slate-800 flex justify-between items-center">
           <div className="flex items-center space-x-3">
@@ -56,11 +76,13 @@ const AuctobotConsole: React.FC<AuctobotConsoleProps> = ({ isOpen, onClose }) =>
               <Terminal className="text-white" size={18} />
             </div>
             <div>
-              <h3 className="font-bold text-white">Auctobot Orchestrator</h3>
+              <h3 className="font-bold text-white">Auctobot Decision Queue</h3>
               <div className="flex items-center space-x-2 text-xs">
-                <span className="text-emerald-400 flex items-center"><Circle size={6} fill="currentColor" className="mr-1" /> Online</span>
+                <span className="text-emerald-400 flex items-center">
+                  <Circle size={6} fill="currentColor" className="mr-1" /> Online
+                </span>
                 <span className="text-slate-500">|</span>
-                <span className="text-slate-400">Cycle ID: WK44-2023</span>
+                <span className="text-slate-400">{queue.length} Pending</span>
               </div>
             </div>
           </div>
@@ -69,65 +91,100 @@ const AuctobotConsole: React.FC<AuctobotConsoleProps> = ({ isOpen, onClose }) =>
           </button>
         </div>
 
-        {/* Visualization Pipeline */}
-        <div className="bg-slate-900 p-6 border-b border-slate-800 flex justify-between items-center relative">
-          {/* Connector Line */}
-          <div className="absolute top-1/2 left-10 right-10 h-0.5 bg-slate-800 -z-0"></div>
-          
-          {[
-            { label: 'Data', icon: Server, active: true },
-            { label: 'Model', icon: RefreshCw, active: true },
-            { label: 'Decision', icon: Play, active: true },
-            { label: 'Govern', icon: Shield, active: true },
-            { label: 'Exec', icon: CheckCircle, active: logs.length >= 8 }
-          ].map((step, idx) => (
-            <div key={idx} className="relative z-10 flex flex-col items-center space-y-2">
-              <div className={`w-12 h-12 rounded-full border-2 flex items-center justify-center transition-all duration-500 ${
-                step.active 
-                  ? 'bg-indigo-900 border-indigo-500 text-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.5)]' 
-                  : 'bg-slate-800 border-slate-700 text-slate-600'
-              }`}>
-                <step.icon size={20} />
-              </div>
-              <span className={`text-xs font-medium ${step.active ? 'text-indigo-300' : 'text-slate-600'}`}>{step.label}</span>
+        {error && (
+          <div className="bg-red-900/20 border-b border-red-800 p-3 text-red-400 text-sm flex items-center gap-2">
+            <AlertTriangle size={16} /> {error}
+          </div>
+        )}
+
+        {/* Queue Section */}
+        <div className="p-4 border-b border-slate-800">
+          <div className="flex justify-between items-center mb-3">
+            <h4 className="text-slate-200 font-bold flex items-center gap-2">
+              <Package size={18} className="text-amber-400" />
+              Pending Execution ({queue.length})
+            </h4>
+            <button
+              onClick={handleExecute}
+              disabled={queue.length === 0 || isExecuting}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg font-bold text-sm flex items-center gap-2 transition-colors"
+            >
+              {isExecuting ? (
+                <>
+                  <RefreshCw size={16} className="animate-spin" /> Executing...
+                </>
+              ) : (
+                <>
+                  <Play size={16} /> AUTHORIZE BATCH
+                </>
+              )}
+            </button>
+          </div>
+
+          {queue.length === 0 ? (
+            <div className="text-center text-slate-500 py-8 bg-slate-800/30 rounded-lg">
+              No pending decisions. Queue is empty.
             </div>
-          ))}
+          ) : (
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {queue.map((pkg) => (
+                <div key={pkg.id} className="bg-slate-800/50 p-3 rounded-lg border border-slate-700 hover:border-amber-500/50 transition-colors">
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 bg-amber-900/30 text-amber-400 text-xs font-bold rounded">
+                        {pkg.action}
+                      </span>
+                      <span className="text-slate-400 text-xs font-mono">{pkg.id}</span>
+                    </div>
+                    <span className="text-xs text-slate-500">{new Date(pkg.timestamp).toLocaleTimeString()}</span>
+                  </div>
+                  <div className="text-sm text-slate-300">
+                    Target: <span className="font-mono text-indigo-400">{pkg.target_id}</span>
+                    <span className="mx-2 text-slate-600">|</span>
+                    Qty: <span className="text-emerald-400 font-bold">{pkg.quantity}</span>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">{pkg.reason}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Logs Console */}
-        <div className="flex-1 bg-black/40 p-4 overflow-y-auto font-mono text-sm" ref={scrollRef}>
-          <div className="space-y-1">
-            {logs.map((log) => (
-              <div key={log.id} className="flex space-x-3 items-start hover:bg-white/5 p-1 rounded">
-                <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
-                <span className={`font-bold shrink-0 w-24 ${
-                  log.plane === Plane.DATA ? 'text-blue-400' :
-                  log.plane === Plane.INTELLIGENCE ? 'text-purple-400' :
-                  // Changed Plane.DECISION to Plane.ORCHESTRATION
-                  log.plane === Plane.ORCHESTRATION ? 'text-amber-400' :
-                  log.plane === Plane.GOVERNANCE ? 'text-red-400' : 'text-emerald-400'
-                }`}>{log.plane.split(' ')[0]}</span>
-                <div className="flex-1">
-                  <span className="text-slate-200">{log.action}</span>
-                  {log.details && (
-                    <span className="text-slate-500 ml-2 border-l border-slate-700 pr-2 italic">
-                      {log.details}
+        {/* History Section */}
+        <div className="flex-1 p-4 overflow-hidden flex flex-col">
+          <h4 className="text-slate-200 font-bold flex items-center gap-2 mb-3">
+            <Clock size={18} className="text-blue-400" />
+            Execution History
+          </h4>
+          <div className="flex-1 bg-black/40 p-4 overflow-y-auto font-mono text-sm rounded-lg" ref={scrollRef}>
+            <div className="space-y-1">
+              {history.length === 0 ? (
+                <div className="text-slate-600 text-center py-8">No execution history yet.</div>
+              ) : (
+                history.map((pkg) => (
+                  <div key={pkg.id} className="flex space-x-3 items-start hover:bg-white/5 p-1 rounded">
+                    <span className="text-slate-500 shrink-0 text-xs">
+                      [{new Date(pkg.timestamp).toLocaleTimeString()}]
                     </span>
-                  )}
-                </div>
-                <div>
-                  {log.status === 'success' && <span className="text-emerald-500">OK</span>}
-                  {log.status === 'warning' && <span className="text-amber-500">WARN</span>}
-                  {log.status === 'running' && <span className="text-blue-400 animate-pulse">...</span>}
-                </div>
-              </div>
-            ))}
-            {logs.length === MOCK_LOGS.length && (
-              <div className="text-emerald-500 pt-4">
-                {'>'} Cycle Completed Successfully. 
-                <span className="animate-pulse">_</span>
-              </div>
-            )}
+                    <span className={`font-bold shrink-0 w-20 text-xs ${pkg.status === 'EXECUTED' ? 'text-emerald-400' :
+                        pkg.status === 'FAILED' ? 'text-red-400' : 'text-amber-400'
+                      }`}>
+                      {pkg.action}
+                    </span>
+                    <div className="flex-1 text-xs">
+                      <span className="text-slate-300">{pkg.target_id}</span>
+                      <span className="text-slate-600 mx-2">→</span>
+                      <span className="text-slate-400">{pkg.quantity}</span>
+                    </div>
+                    <div>
+                      {pkg.status === 'EXECUTED' && <span className="text-emerald-500 text-xs">✓ OK</span>}
+                      {pkg.status === 'FAILED' && <span className="text-red-500 text-xs">✗ ERR</span>}
+                      {pkg.status === 'PENDING' && <span className="text-amber-400 text-xs animate-pulse">...</span>}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       </div>

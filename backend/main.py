@@ -21,6 +21,17 @@ from core.policy_engine import policy_engine
 from core.domain_model import domain_mgr
 from core.sql_schema import init_db
 
+# --- AGENCY & DEBATE SYSTEMS ---
+try:
+    from core.agency import auctobot
+except ImportError:
+    auctobot = None
+
+try:
+    from core.debate import debate_engine
+except ImportError:
+    debate_engine = None
+
 # --- AUXILIARY ENGINES ---
 try:
     from core.transformations import transform_engine
@@ -333,7 +344,75 @@ async def derive_metric(req: MetricDerivation):
 
 
 # ==============================================================================
-# 6. SYSTEM HEALTH
+# 6. AGENCY & DEBATE ENDPOINTS
+# ==============================================================================
+
+@app.get("/agency/queue")
+async def get_auctobot_queue():
+    """
+    Returns pending and historical decision packages from Auctobot.
+    """
+    if not auctobot:
+        raise HTTPException(status_code=503, detail="Auctobot offline")
+    
+    return {
+        "queue": auctobot.get_queue(),
+        "history": auctobot.get_history(limit=20)
+    }
+
+@app.post("/agency/execute")
+async def execute_auctobot():
+    """
+    Executes all queued decision packages and records to ledger.
+    """
+    if not auctobot:
+        raise HTTPException(status_code=503, detail="Auctobot offline")
+    
+    results = auctobot.execute_batch()
+    return {
+        "status": "completed",
+        "results": results,
+        "queue_cleared": len(results)
+    }
+
+@app.get("/debate/tickets")
+async def get_debate_tickets():
+    """
+    Returns all active conflict resolution tickets.
+    """
+    if not debate_engine:
+        raise HTTPException(status_code=503, detail="Debate engine offline")
+    
+    tickets = debate_engine.get_active_tickets()
+    return {
+        "status": "success",
+        "tickets": tickets,
+        "count": len(tickets)
+    }
+
+class ResolveTicketRequest(BaseModel):
+    ticket_id: str
+    approved: bool
+
+@app.post("/debate/resolve")
+async def resolve_debate(request: ResolveTicketRequest):
+    """
+    Resolves a conflict ticket.
+    If approved, forwards decision to Auctobot.
+    """
+    if not debate_engine:
+        raise HTTPException(status_code=503, detail="Debate engine offline")
+    
+    result = debate_engine.resolve_ticket(request.ticket_id, request.approved)
+    
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    
+    return result
+
+
+# ==============================================================================
+# 7. SYSTEM HEALTH
 # ==============================================================================
 
 @app.get("/")

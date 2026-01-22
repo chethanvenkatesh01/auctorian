@@ -350,7 +350,35 @@ export const api = {
   },
 
   // =========================================================
-  // 6. WORKSPACE HELPERS
+  // 6. AGENCY & DEBATE SYSTEMS
+  // =========================================================
+
+  agency: {
+    getQueue: async () => {
+      const res = await client.get('/agency/queue');
+      return res.data;
+    },
+
+    execute: async () => {
+      const res = await client.post('/agency/execute');
+      return res.data;
+    }
+  },
+
+  debate: {
+    getTickets: async () => {
+      const res = await client.get('/debate/tickets');
+      return res.data;
+    },
+
+    resolveTicket: async (ticketId: string, approved: boolean) => {
+      const res = await client.post('/debate/resolve', { ticket_id: ticketId, approved });
+      return res.data;
+    }
+  },
+
+  // =========================================================
+  // 7. WORKSPACE HELPERS
   // =========================================================
 
   async initPlanningWorkspace(scope: PlanningScope): Promise<string> {

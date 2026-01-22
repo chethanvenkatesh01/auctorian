@@ -322,6 +322,51 @@ async def upload_file(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/ingest/universal")
+async def ingest_universal_data(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    config: str = Form(...)
+):
+    """
+    [DATA PLANE] Handles full file ingestion (Schema + Data).
+    Runs in background to prevent timeout on large files.
+    """
+    try:
+        # Parse Config
+        conf = json.loads(config)
+        entity_type = conf.get('entityType')
+        mapping = conf.get('mapping', {})
+        
+        logger.info(f"📥 [INGEST] Received {file.filename} for {entity_type}. Starting background processing...")
+        
+        # Read file content into memory (for now - for 1.5M rows ~200MB, this is okay)
+        # For production, we'd stream it, but let's keep it simple for the prototype.
+        content = await file.read()
+        content_str = content.decode('utf-8')
+
+        # Define the background task
+        def _process_job():
+            try:
+                logger.info(f"⚙️ [JOB_START] Processing {entity_type}...")
+                result = ingestion_engine.process_metric_stream(
+                    content_str, 
+                    mapping, 
+                    metric_prefix=entity_type
+                )
+                logger.info(f"✅ [JOB_COMPLETE] {entity_type}: {result}")
+            except Exception as e:
+                logger.error(f"❌ [JOB_FAILED] {entity_type}: {e}")
+
+        # Queue the task
+        background_tasks.add_task(_process_job)
+        
+        return {"status": "queued", "message": f"Ingestion started for {entity_type}"}
+
+    except Exception as e:
+        logger.error(f"Ingestion Handshake Failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 class MappingRequest(BaseModel):
     filename: str
     mapping: Dict[str, str]

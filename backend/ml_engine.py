@@ -204,15 +204,29 @@ class MLEngine:
 
     def _calculate_hierarchical_accuracy(self, df: pd.DataFrame, levels: List[str]) -> List[Dict]:
         """
-        Dynamically aggregates forecasts based on User-Defined Hierarchy.
-        Uses ANCHOR_AGGREGATION_RULES to prevent invalid price summation.
+        [UPGRADED] Generates the 'Accuracy Matrix' with Time Dimension.
+        Aggregates forecasts based on User-Defined Hierarchy AND Time Buckets.
         """
-        # Generate Predictions
-        features = [Anchors.RETAIL_PRICE, 'LAG_1', 'MA_7'] # Must match training
+        # 1. Prepare Data
+        # Ensure we have the Date Anchor for time-phasing
+        date_col = Anchors.TX_DATE
+        if date_col not in df.columns:
+            # Fallback if mapped differently, though FeatureStore should standardize this
+            date_col = 'transaction_date' 
+        
+        # Convert to datetime and extract Week
+        try:
+            df['encoded_date'] = pd.to_datetime(df[date_col])
+            df['period'] = df['encoded_date'].dt.strftime('%Y-W%U') # Weekly Bucket
+        except:
+            df['period'] = 'Global'
+
+        features = [Anchors.RETAIL_PRICE, 'LAG_1', 'MA_7']
+        # Add dynamic features
         for col in df.columns:
              if col.startswith("feat_"): features.append(col)
         
-        # Ensure cols exist
+        # Generate Predictions at Lowest Level (Product x Time)
         X = df[features].fillna(0)
         if hasattr(self.model, 'predict'):
             df['predicted_qty'] = self.model.predict(X)
@@ -221,30 +235,46 @@ class MLEngine:
 
         matrix = []
         
-        def calc_row(level, group, actual, predicted):
-            if actual == 0: actual = 1.0
-            wmape = abs(actual - predicted) / actual
-            bias = (predicted - actual) / actual
-            return {
-                "level": level, "group": str(group),
-                "accuracy": max(0, int((1 - wmape) * 100)),
-                "bias": round(bias, 3)
-            }
+        def calc_metric(act, pred):
+            if act == 0: act = 1.0 # Prevent div/0
+            wmape = abs(act - pred) / act
+            bias = (pred - act) / act
+            return max(0, int((1 - wmape) * 100)), round(bias, 3)
 
-        # 1. Global (Sum quantities only)
-        matrix.append(calc_row("Global", "All", df[Anchors.SALES_QTY].sum(), df['predicted_qty'].sum()))
+        # ---------------------------------------------------------
+        # AGGREGATION 1: GLOBAL (All Products, All Time)
+        # ---------------------------------------------------------
+        g_acc, g_bias = calc_metric(df[Anchors.SALES_QTY].sum(), df['predicted_qty'].sum())
+        matrix.append({
+            "level": "Global", "group": "All", "period": "All Time",
+            "accuracy": g_acc, "bias": g_bias, 
+            "actual": float(df[Anchors.SALES_QTY].sum()), 
+            "forecast": float(df['predicted_qty'].sum())
+        })
 
-        # 2. Dynamic Levels (Smart Aggregation)
-        # Smart Aggregation: Use dna.py rules to aggregate correctly
-        # Quantities = sum(), Prices = mean()
+        # ---------------------------------------------------------
+        # AGGREGATION 2: DYNAMIC HIERARCHY x TIME
+        # ---------------------------------------------------------
+        # We loop through user-defined levels (e.g., Division, Category)
         for level_col in levels:
             if level_col in df.columns:
-                # Aggregate with proper methods
-                agg_dict = {Anchors.SALES_QTY: 'sum', 'predicted_qty': 'sum'}
-                grouped = df.groupby(level_col).agg(agg_dict).reset_index()
+                # Group by [Hierarchy Node, Time Period]
+                grouped = df.groupby([level_col, 'period']).agg({
+                    Anchors.SALES_QTY: 'sum', 
+                    'predicted_qty': 'sum'
+                }).reset_index()
                 
                 for _, row in grouped.iterrows():
-                    matrix.append(calc_row(level_col, row[level_col], row[Anchors.SALES_QTY], row['predicted_qty']))
+                    acc, bias = calc_metric(row[Anchors.SALES_QTY], row['predicted_qty'])
+                    matrix.append({
+                        "level": level_col,          # e.g., "Category"
+                        "group": str(row[level_col]),# e.g., "Shoes"
+                        "period": row['period'],     # e.g., "2024-W01"
+                        "accuracy": acc,
+                        "bias": bias,
+                        "actual": float(row[Anchors.SALES_QTY]),
+                        "forecast": float(row['predicted_qty'])
+                    })
 
         return matrix
 

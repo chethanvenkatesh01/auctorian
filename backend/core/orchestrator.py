@@ -29,6 +29,13 @@ try:
 except Exception:
     pass
 
+# --- AGENCY LAYER (Execution System) ---
+auctobot = None
+try:
+    from .agency import auctobot, DecisionPackage
+except Exception:
+    pass
+
 class Orchestrator:
     """
     The High-Performance Decision Engine (v10.30 - Self-Correcting).
@@ -324,7 +331,28 @@ class Orchestrator:
             # Profit Check
             if rec > 0 and self.validator:
                 val = self.validator.validate("BUY", rec * row['price'], rec * row['cost'], 60)
-                if not val['approved']: 
+                if val['approved']:
+                    # APPROVED: Queue to Auctobot
+                    if auctobot:
+                        pkg = DecisionPackage(
+                            action="REPLENISH",
+                            target_id=row['obj_id'],
+                            quantity=rec,
+                            reason=f"Safety Stock Replenishment (Cover: {(inv/demand if demand>0 else 99):.1f}d)"
+                        )
+                        auctobot.queue_decision(pkg)
+                        decision = "QUEUED"
+                        rationale = f"Decision Package: {pkg.id}"
+                else:
+                    # REJECTED: Create Debate Ticket
+                    if debate_engine:
+                        debate_engine.create_ticket(
+                            node_id=row['obj_id'],
+                            issue_type="PROFIT_GUARD",
+                            value=rec,
+                            threshold=row['price'],
+                            reason=val['reason']
+                        )
                     decision = "DEBATE"
                     rationale = val['reason']
 

@@ -467,6 +467,7 @@ def health_check():
         "status": "SOVEREIGN", 
         "system": "Auctorian Kernel v6.2-Monolith", 
         "architecture": "Local Inference (Llama-3)",
+        "is_locked": domain_mgr.is_system_locked(),  # CRITICAL: Frontend needs this
         "modules": {
             "physics_layer": "ONLINE",
             "memory_layer": "HYDRATED",
@@ -474,6 +475,11 @@ def health_check():
             "ml_engine": "ONLINE" if ml_engine else "OFFLINE"
         }
     }
+
+# Also add /health endpoint as alias for compatibility
+@app.get("/health")
+def health_check_alias():
+    return health_check()
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

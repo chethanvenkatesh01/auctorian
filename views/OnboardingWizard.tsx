@@ -75,11 +75,31 @@ export const OnboardingWizard: React.FC = () => {
     };
 
     const handleIngestionComplete = async (payload: any) => {
-        await api.ontology.registerSchema(payload.entityType, payload.fields);
-        const registry = await api.ontology.getRegistry();
-        setRegisteredSchemas(registry);
-        setViewMode('ENTITY_SELECT');
-        setActiveEntityId(null);
+        try {
+            // 1. Register Schema (Metadata)
+            console.log("📝 Saving Schema...");
+            await api.ontology.registerSchema(payload.entityType, payload.fields);
+
+            // 2. Upload Data (Content) - [CRITICAL FIX]
+            if (payload.file) {
+                console.log("📤 Uploading Data...", payload.file.name);
+                const config = {
+                    entityType: payload.entityType,
+                    mapping: payload.mapping
+                };
+                // Fire and forget (Server handles background processing)
+                await api.ingest.uploadUniversal(payload.file, config);
+                alert(`✅ Data Upload Started for ${payload.entityType}.\n\nCheck Docker logs to monitor progress:\ndocker-compose logs -f auctorian_kernel`);
+            }
+
+            const registry = await api.ontology.getRegistry();
+            setRegisteredSchemas(registry);
+            setViewMode('ENTITY_SELECT');
+            setActiveEntityId(null);
+        } catch (e: any) {
+            console.error("❌ Ingestion Error:", e);
+            alert("Ingestion Failed: " + (e.response?.data?.detail || e.message || 'Unknown error'));
+        }
     };
 
     const handleFinalize = async () => {
